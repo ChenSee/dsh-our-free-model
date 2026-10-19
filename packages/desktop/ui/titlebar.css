@@ -108,6 +108,8 @@
 .ofm-tb-actions {
   display: flex;
   align-items: center;
+  /* 双保险：即便容器布局退化，按钮也始终贴右（Windows/macOS 惯例右上角）。 */
+  margin-left: auto;
   -webkit-app-region: no-drag;
 }
 

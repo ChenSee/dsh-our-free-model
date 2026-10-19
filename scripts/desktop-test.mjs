@@ -229,6 +229,21 @@ try {
     assert.ok(js.includes("'--port', String(port)"), '桌面壳必须显式传 --port')
     assert.ok(/OFM_PORT[\s\S]{0,120}18900/.test(js), '默认端口必须是 18900（OFM_PORT 仅作覆盖）')
   })
+  await check('注入的标题栏 CSS 原样整份投递，不做字符串改写', () => {
+    // 注入时对 CSS 做 .replace('#ofm-titlebar {', '#ofm-titlebar{...}') 会把原规则
+    // 提前闭合，其后声明全被丢弃 → 标题栏不再 flex，窗口按钮被挤到左上角。
+    const js = fs.readFileSync(path.join(repositoryRoot, 'packages/desktop-electron/main.js'), 'utf8')
+    const block = js.slice(js.indexOf('function titlebarScript'))
+    const body = block.slice(0, block.indexOf('\nlet splashWindow'))
+    const cssStart = body.indexOf('const css =')
+    const jsStart = body.indexOf('const js =')
+    assert.ok(cssStart >= 0 && jsStart > cssStart, 'CSS 应整份读出')
+    assert.ok(!body.slice(cssStart, jsStart).includes('.replace('),
+      '注入 CSS 不得改写内容：改坏 #ofm-titlebar 规则会让按钮跑到左侧')
+    const css = fs.readFileSync(path.join(repositoryRoot, 'packages/desktop/ui/titlebar.css'), 'utf8')
+    assert.ok(/justify-content:\s*space-between/.test(css), '标题栏必须是两端对齐布局')
+    assert.ok(/\.ofm-tb-actions\s*\{[^}]*margin-left:\s*auto/.test(css), '按钮容器需贴右（margin-left:auto 兜底）')
+  })
   console.log(`${checks}/${checks} 桌面回归检查通过`)
 } finally {
   for (const child of children) {

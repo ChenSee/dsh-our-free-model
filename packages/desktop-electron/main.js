@@ -168,9 +168,13 @@ function startService() {
  *  preload 暴露的 ofmTitlebarApi；拖拽由 CSS app-region 承担，
  *  startDragging 成为 no-op。 */
 function titlebarScript(origin) {
+  // 整份注入，不对 CSS 做任何字符串改写。
+  // 踩过：曾经在这里 .replace('#ofm-titlebar {', '#ofm-titlebar{-webkit-app-region:drag}')
+  // 想补一条 drag 规则，结果原规则被提前闭合，其后的 display:flex /
+  // justify-content:space-between / height / padding 全部变成游离声明被丢弃。
+  // 标题栏因此退化成普通块级元素：标题独占一行、按钮容器贴左边（用户报的
+  // 「窗口按钮在左边」）。titlebar.css 本身已含 -webkit-app-region:drag，不需要补。
   const css = fs.readFileSync(asset('assets', 'titlebar.css'), 'utf8')
-    // 无边框拖拽：标题栏空白区域可拖动（按钮区域由 no-drag 排除）。
-    .replace('#ofm-titlebar {', '#ofm-titlebar{-webkit-app-region:drag}')
   const js = fs.readFileSync(asset('assets', 'titlebar.js'), 'utf8')
     .replace(/window\.__TAURI__/g, 'window.ofmTitlebar')
   const bridge = `
