@@ -158,12 +158,11 @@ try {
       assert.equal((await fetch(`http://127.0.0.1:${results[winner].port}/health`)).status, 200)
       await instances[winner].stop()
     })
-    await check('旧版活进程、无效 PID、损坏内容及未知归属的锁均保留，拒绝后可再次启动', async () => {
+    await check('无法确认归属的锁一律保留，确认无可信信息后再回收', async () => {
       const directory = path.join(scratch, 'unverifiable-lock')
       const lockFile = path.join(directory, 'service.lock')
       fs.mkdirSync(directory)
       for (const owner of [
-        { pid: process.pid, product: 'our-free-model-standalone' },
         { pid: 0, product: 'our-free-model-standalone' },
         { pid: -1, product: 'our-free-model-standalone' },
         { pid: String(crashedPid), product: 'our-free-model-standalone' },
@@ -184,6 +183,21 @@ try {
       assert.equal((await recovered.ready()).protocol, 'ofm-desktop-ready/v1')
       await recovered.stop()
     })
+    if (process.platform === 'win32' || process.platform === 'linux') {
+      await check('锁里的 PID 是无辜活进程（PID 复用）时也能启动，不把用户卡死', async () => {
+        // 真实故障：服务异常退出留下锁文件，系统把它的 PID 回收给了无关进程，
+        // 于是「进程还活着」永远成立，启动永久报 DATA_DIRECTORY_IN_USE。
+        const directory = path.join(scratch, 'reused-pid-lock')
+        fs.mkdirSync(directory)
+        fs.writeFileSync(path.join(directory, 'service.lock'),
+          JSON.stringify({ pid: process.pid, product: 'our-free-model-standalone' }))
+        const recovered = launch({ directory })
+        assert.equal((await recovered.ready()).protocol, 'ofm-desktop-ready/v1')
+        assert.equal(JSON.parse(fs.readFileSync(path.join(directory, 'service.lock'))).pid, recovered.child.pid)
+        assert.notEqual(recovered.child.pid, process.pid)
+        await recovered.stop()
+      })
+    }
   }
   await check('桌面配置使用明确资源映射，启动不依赖系统 Node；标题栏 API 使用 v2', () => {
     const config = JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'packages/desktop/src-tauri/tauri.conf.json')))

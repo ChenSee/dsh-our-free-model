@@ -19,14 +19,21 @@ export function resolveStandaloneDataDir(env = process.env, home = os.homedir())
   return configured === '' ? path.join(home, '.our-free-model') : path.resolve(configured)
 }
 
-/** 内核自动释放的互斥端点，串行化同一数据目录的锁检查与回收。 */
-async function acquireProcessGuard(dataDir) {
+/** 数据目录的进程级互斥端点：Windows 命名管道 / Linux 抽象 Unix Socket。
+ *  端点由内核持有，持锁进程退出（无论多粗暴）都会自动释放；锁文件里的 PID
+ *  则会被操作系统回收复用，不能单独作为持锁证据。 */
+function processGuardAddress(dataDir) {
   // 其他平台保留原来的保守文件锁行为，不使用会遗留文件的 Unix Socket。
   if (process.platform !== 'win32' && process.platform !== 'linux') return null
   let canonical = fs.realpathSync.native(dataDir)
   if (process.platform === 'win32') canonical = canonical.toLowerCase()
   const id = crypto.createHash('sha256').update(canonical).digest('hex')
-  const address = process.platform === 'win32' ? `\\\\.\\pipe\\ofm-service-lock-${id}` : `\0ofm-service-lock-${id}`
+  return process.platform === 'win32' ? `\\\\.\\pipe\\ofm-service-lock-${id}` : `\0ofm-service-lock-${id}`
+}
+
+/** 内核自动释放的互斥端点，串行化同一数据目录的锁检查与回收。 */
+async function acquireProcessGuard(dataDir, address = processGuardAddress(dataDir)) {
+  if (!address) return null
   const server = net.createServer(socket => socket.destroy())
   try {
     await new Promise((resolve, reject) => {
@@ -44,6 +51,8 @@ async function acquireProcessGuard(dataDir) {
 }
 
 async function acquireServiceLock(dataDir) {
+  // 先拿内核互斥端点：它被占用说明真有活服务，直接抛 EEXIST；
+  // 能拿到说明没有活的持锁者，下面锁文件里的 PID 只是历史信息。
   const releaseGuard = await acquireProcessGuard(dataDir)
   const lockFile = path.join(dataDir, 'service.lock')
   const token = crypto.randomUUID()
@@ -69,10 +78,16 @@ async function acquireServiceLock(dataDir) {
       let owner
       try { owner = JSON.parse(previous) } catch { throw error }
       if (owner?.product !== PRODUCT || !Number.isSafeInteger(owner.pid) || owner.pid <= 0) throw error
-      // 只有 ESRCH 能证明进程已经退出；无权限、PID 复用等情况均保留原锁。
-      let exited = false
-      try { process.kill(owner.pid, 0) }
-      catch (probeError) { exited = probeError.code === 'ESRCH' }
+      // PID 会被操作系统回收复用：旧服务早已死亡，PID 却可能已被无关进程占用，
+      // ESRCH 判定随之失效，锁就永远废旧在这里（用户只能手删文件）。
+      // 互斥端点由内核持有、进程退出即释放：能走到这里说明端点空着且已被本
+      // 进程持有，等于没有活的持锁者，这份锁文件是上次异常退出留下的。
+      // 没有互斥端点的平台退回原来的 PID 判断，保持保守。
+      let exited = Boolean(releaseGuard)
+      if (!exited) {
+        try { process.kill(owner.pid, 0) }
+        catch (probeError) { exited = probeError.code === 'ESRCH' }
+      }
       if (!exited) throw error
       const current = fs.lstatSync(lockFile)
       if (current.dev !== previousStat.dev || current.ino !== previousStat.ino ||

@@ -155,18 +155,30 @@ try {
     await recovered.close()
   })
   if (process.platform === 'win32' || process.platform === 'linux') {
-    await check('没有权限检查进程时保留锁，不把 EPERM 当成进程退出', async () => {
+    // PID 会被操作系统回收复用：持锁进程早已死亡、PID 却落到无关进程头上时，
+    // ESRCH 判不出“锁已废旧”，用户只能手删 service.lock（真实踩过的坑）。
+    // 内核互斥端点由持锁进程持有、进程退出即释放，端点空着就说明没有活的
+    // 持锁者——此时锁文件里的 PID 只是历史信息，应直接回收。
+    await check('持锁 PID 已死或被复用时，凭内核端点回收陈旧锁', async () => {
       const directory = path.join(scratch, 'permission-lock')
       const lockFile = path.join(directory, 'service.lock')
       fs.mkdirSync(directory)
       const original = JSON.stringify({ pid: process.pid, product: 'our-free-model-standalone' })
       fs.writeFileSync(lockFile, original)
       const nativeKill = process.kill
+      // 探不动 PID（EPERM）时同样不保留锁：端点空着本身就是更强证据。
       process.kill = () => { throw Object.assign(new Error('permission denied'), { code: 'EPERM' }) }
+      let recovered
       try {
-        await assert.rejects(startStandalone({ dataDir: directory, port: 0, refresh: false }), { code: 'EEXIST' })
-        assert.equal(fs.readFileSync(lockFile, 'utf8'), original)
+        recovered = await startStandalone({ dataDir: directory, port: 0, refresh: false, logger: { warn() {} } })
       } finally { process.kill = nativeKill }
+      try {
+        const owned = JSON.parse(fs.readFileSync(lockFile, 'utf8'))
+        assert.equal(owned.pid, process.pid)
+        assert.equal(owned.product, 'our-free-model-standalone')
+        assert.notEqual(owned.token, undefined)
+      } finally { await recovered.close() }
+      assert.equal(fs.existsSync(lockFile), false)
     })
   }
   await check('the listener starts while its upstream listing is held', async () => {
