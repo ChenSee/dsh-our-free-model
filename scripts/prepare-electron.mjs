@@ -13,9 +13,9 @@ fs.mkdirSync(splash, { recursive: true })
 // 界面资源与 Tauri 版共用一份源，避免两处维护出现行为分叉。
 fs.copyFileSync(path.join(tauri, 'ui/titlebar.css'), path.join(assets, 'titlebar.css'))
 fs.copyFileSync(path.join(tauri, 'ui/titlebar.js'), path.join(assets, 'titlebar.js'))
-for (const name of ['splash.html', 'error.html']) {
-  fs.copyFileSync(path.join(tauri, 'splash', name), path.join(splash, name))
-}
+fs.copyFileSync(path.join(tauri, 'splash', 'splash.html'), path.join(splash, 'splash.html'))
+// error.html 不共用：Electron 版多了「重试启动 / 退出」按钮与 IPC 桥接，
+// 由 main.js 的 showFailure() 自己填充原因文本，改它会覆盖掉这套交互。
 const ico = path.join(tauri, 'src-tauri/icons/icon.ico')
 if (fs.existsSync(ico)) fs.copyFileSync(ico, path.join(assets, 'icon.ico'))
 else console.warn('未找到 icon.ico，安装包将使用默认图标')
