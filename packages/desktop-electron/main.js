@@ -93,13 +93,15 @@ function startService() {
   const env = { ...process.env, OFM_HOME: dataDir }
   delete env.NODE_OPTIONS
   delete env.NODE_PATH
-  // 端口默认与安装版一致（18900）；OFM_PORT 供绿色版多开或排障时避让。
-  const port = /^\d+$/.test(process.env.OFM_PORT ?? '') ? Number(process.env.OFM_PORT) : null
+  // 端口固定 18900（与安装版约定一致）。不能依赖 settings 里记住的
+  // standalonePort：服务每次启动都会把实际端口写回，一次 `--port 189xx`
+  // 排障（或 18900 被占时的自动顺延）就会让它永久漂移，桌面端再也回不到
+  // 18900。这里显式请求，OFM_PORT 供绿色版多开或排障时覆盖。
+  const port = /^\d+$/.test(process.env.OFM_PORT ?? '') ? Number(process.env.OFM_PORT) : 18900
   return new Promise(resolve => {
     // 与 Tauri 版一致：以服务目录为工作目录、只传文件名，避免 Windows
     // canonicalize 后的 \\?\ 长路径前缀被 Node 拒绝。
-    const args = ['--data-dir', dataDir]
-    if (port !== null) args.push('--port', String(port))
+    const args = ['--data-dir', dataDir, '--port', String(port)]
     const child = spawn(node, [path.basename(host), ...args], {
       cwd: path.dirname(host), env, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true,
     })

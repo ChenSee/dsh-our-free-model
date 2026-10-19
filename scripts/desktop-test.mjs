@@ -222,6 +222,13 @@ try {
     assert.ok(/clearTimeout\(watchdog\)/.test(js), '拿到协议行必须撤销看门狗')
     assert.ok(/watchdog[\s\S]{0,400}30000/.test(js), '无协议行时必须有超时收掉子进程')
   })
+  await check('桌面壳固定请求 18900，不依赖 settings 记住的上次端口', () => {
+    // 服务启动时会把实际端口写回 settings.standalonePort，下次没有 --port 就
+    // 复用它——一次排障用 --port 189xx 就会让桌面端永久漂移，用户再也回不到 18900。
+    const js = fs.readFileSync(path.join(repositoryRoot, 'packages/desktop-electron/main.js'), 'utf8')
+    assert.ok(js.includes("'--port', String(port)"), '桌面壳必须显式传 --port')
+    assert.ok(/OFM_PORT[\s\S]{0,120}18900/.test(js), '默认端口必须是 18900（OFM_PORT 仅作覆盖）')
+  })
   console.log(`${checks}/${checks} 桌面回归检查通过`)
 } finally {
   for (const child of children) {
