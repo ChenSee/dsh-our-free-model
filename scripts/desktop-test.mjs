@@ -211,6 +211,17 @@ try {
     const hooks = fs.readFileSync(path.join(repositoryRoot, 'packages/desktop/src-tauri/install-hooks.nsh'), 'utf8')
     assert.ok(!/taskkill|Delete |FileWrite/.test(hooks))
   })
+  await check('Electron 壳逐行跳过 stdout 噪声，不只解析第一行（Tauri 同口径）', () => {
+    // 端口移植时踩过：main.js 只 JSON.parse stdout 第一行。服务启动时会先打
+    // "egress outlet up"、channel-pack 自动签到等日志，于是正常启动被误判成
+    // 「握手校验失败」；且该分支不杀子进程，孤儿服务占着锁，重试全撞它，
+    // 最终错误页显示「数据目录被服务占用」——指错方向且用户无解。
+    const js = fs.readFileSync(path.join(repositoryRoot, 'packages/desktop-electron/main.js'), 'utf8')
+    assert.ok(!/JSON\.parse\(first\)/.test(js), '不得只解析 stdout 第一行')
+    assert.ok(/typeof value\.protocol === 'string'/.test(js), '协议行必须按 protocol 字段逐行判定')
+    assert.ok(/clearTimeout\(watchdog\)/.test(js), '拿到协议行必须撤销看门狗')
+    assert.ok(/watchdog[\s\S]{0,400}30000/.test(js), '无协议行时必须有超时收掉子进程')
+  })
   console.log(`${checks}/${checks} 桌面回归检查通过`)
 } finally {
   for (const child of children) {

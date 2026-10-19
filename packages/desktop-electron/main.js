@@ -107,22 +107,40 @@ function startService() {
     const finish = result => {
       if (settled) return
       settled = true
+      clearTimeout(watchdog)
       resolve(result)
     }
+    // 看门狗：30 秒内没有拿到协议行就收掉子进程。否则卡在启动中段的孤儿服务
+    // 会一直占着数据目录锁，后续重试全部撞它，错误信息完全指错方向。
+    const watchdog = setTimeout(() => {
+      logEvent('startService: 握手超时（30s），收掉子进程')
+      try { child.kill() } catch {}
+      finish({ error: '服务启动握手超时', child })
+    }, 30000)
     let buffer = ''
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', chunk => {
       buffer += chunk
-      const line = buffer.indexOf('\n')
-      if (line < 0) return
-      const first = buffer.slice(0, line).trim()
-      buffer = buffer.slice(line + 1)
-      if (first === '') return
-      let value
-      try { value = JSON.parse(first) } catch { finish({ error: '服务握手校验失败', child }); return }
-      const result = verifyHandshake(value, child.pid)
-      if (result.error) child.kill()
-      finish({ ...result, child })
+      let index = buffer.indexOf('\n')
+      while (index >= 0) {
+        const line = buffer.slice(0, index).trim()
+        buffer = buffer.slice(index + 1)
+        // 服务启动过程中会往 stdout 打日志（egress outlet up、channel-pack
+        // 自动签到等 vendor 输出）。握手协议只认带 protocol 字段的 JSON 行，
+        // 逐行跳过噪声——与 Tauri 版 service.rs 同口径。只解析第一行会把
+        // 正常启动误判成「握手校验失败」，且不杀子进程，留下一整条错误链。
+        if (line !== '') {
+          let value = null
+          try { value = JSON.parse(line) } catch { value = null }
+          if (value && typeof value.protocol === 'string') {
+            const result = verifyHandshake(value, child.pid)
+            if (result.error) child.kill()
+            finish({ ...result, child })
+            return
+          }
+        }
+        index = buffer.indexOf('\n')
+      }
     })
     child.on('error', () => finish({ error: '无法启动内置 Node 服务', child }))
     child.on('exit', code => {
