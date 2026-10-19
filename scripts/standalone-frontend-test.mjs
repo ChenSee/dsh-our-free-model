@@ -164,10 +164,11 @@ const savedSettings = {
   enabled: true, exposeRegionModels: true, streamRecovery: true, standaloneProbe: false,
   hideFreeModels: false, hideEacModels: false,
   defaultMaxTokens: 32768, probeIntervalMinutes: 15,
+  egress: { enabled: false, mode: 'subscription', mihomoPath: '' },
 }
 const cleanDraft = settingsDraft(savedSettings)
 assert.equal(settingsChanged(cleanDraft, savedSettings), false)
-assert.deepEqual(validateSettingsDraft(cleanDraft).patch, savedSettings)
+assert.deepEqual(validateSettingsDraft(cleanDraft).patch, { ...savedSettings, egress: { enabled: false, mode: 'subscription', mihomoPath: '' } })
 for (const [field, valid, invalid] of [
   ['defaultMaxTokens', ['512', '131072', ' 8192 '], ['', ' ', '511', '131073', '512.5', 'NaN', 'Infinity']],
   ['probeIntervalMinutes', ['1', '1440', '12'], ['', ' ', '0', '1441', '1.5', 'NaN', 'Infinity']],
@@ -203,7 +204,27 @@ assert.deepEqual(savedSettings, {
   enabled: true, exposeRegionModels: true, streamRecovery: true, standaloneProbe: false,
   hideFreeModels: false, hideEacModels: false,
   defaultMaxTokens: 32768, probeIntervalMinutes: 15,
+  egress: { enabled: false, mode: 'subscription', mihomoPath: '' },
 }, '草稿操作不能改动输入配置')
+// 出口代理：地址是凭据——草稿只持有脱敏域名；替换填了才发 url，
+// 留空保持原值，清除发显式空串；未填地址启用出口被拒绝。
+const egressDraft = settingsDraft({ ...savedSettings, egress: { enabled: false, mode: 'subscription', hasUrl: true, urlLabel: 'https://outlet.example.com', mihomoPath: '' } })
+assert.equal(egressDraft.egressHasUrl, true)
+assert.equal(egressDraft.egressUrlLabel, 'https://outlet.example.com')
+assert.ok(!Object.hasOwn(egressDraft, 'url'), '草稿不得持有完整地址')
+const kept = validateSettingsDraft({ ...egressDraft, egressEnabled: true, egressUrl: '' })
+assert.ok(kept.patch && kept.patch.egress.enabled === true)
+assert.ok(!Object.hasOwn(kept.patch.egress, 'url'), '地址输入框留空表示保持原值，不发 url')
+const replaced = validateSettingsDraft({ ...egressDraft, egressEnabled: true, egressUrl: '  https://new.example.com/s/token ' })
+assert.equal(replaced.patch.egress.url, 'https://new.example.com/s/token', '替换地址原样提交')
+const cleared = validateSettingsDraft({ ...egressDraft, egressCleared: true })
+assert.equal(cleared.patch.egress.url, '', '清除地址发显式空串让后端删除')
+const refused = validateSettingsDraft({ ...egressDraft, egressEnabled: true, egressHasUrl: false, egressUrl: '' })
+assert.equal(refused.patch, null)
+assert.ok(refused.errors.egressUrl, '没有已存地址时启用出口需要先填写')
+const clientMode = validateSettingsDraft({ ...egressDraft, egressEnabled: true, egressSubscription: false, egressUrl: 'socks5://127.0.0.1:10808' })
+assert.equal(clientMode.patch.egress.mode, 'client')
+assert.equal(clientMode.patch.egress.url, 'socks5://127.0.0.1:10808')
 await verifySettingsHost()
 await verifyModelOperation()
 verifyChannelFilters()

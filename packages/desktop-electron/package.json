@@ -1,0 +1,69 @@
+{
+  "name": "our-free-model-desktop-electron",
+  "version": "2.5.4",
+  "description": "Our Free Model 独立服务的 Windows 桌面壳（Electron 实现，与 Tauri 版行为一致）",
+  "main": "main.js",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "icons": "node build-icons.mjs",
+    "prepare": "node ../../scripts/prepare-electron.mjs",
+    "start": "electron .",
+    "dist": "node build-icons.mjs && node ../../scripts/prepare-electron.mjs && electron-builder --win --x64"
+  },
+  "devDependencies": {
+    "electron": "44.4.5",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.ourfreemodel.desktop",
+    "productName": "Our Free Model",
+    "copyright": "MIT",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload-titlebar.js",
+      "splash/**",
+      "assets/**",
+      "!node_modules"
+    ],
+    "extraResources": [
+      {
+        "from": "../desktop/src-tauri/resources/service",
+        "to": "service"
+      },
+      {
+        "from": "../desktop/src-tauri/resources/runtime",
+        "to": "runtime"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.png",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "installerLanguages": [
+        "zh_CN"
+      ],
+      "language": "2052"
+    }
+  },
+  "dependencies": {
+    "sharp": "^0.35.5"
+  }
+}

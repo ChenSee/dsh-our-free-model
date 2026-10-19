@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import { buildStats } from '../../src/core/stats.js'
 import { generateKey } from '../../src/forward.js'
 import { structuralRejection } from '../../src/trust.js'
+import { outletLabel } from '../../src/egress.js'
 import { openLoginTerminal } from './login-terminal.mjs'
 import { publicModelVisibility, validateModelVisibility, isModelHidden } from '../../src/store.js'
 
@@ -22,6 +23,20 @@ const SECURITY_HEADERS = {
 
 function fail(statusCode, message) {
   return Object.assign(new Error(message), { statusCode })
+}
+
+/** 出口设置对外只暴露脱敏域名；完整地址仅由 `/egress/url` 按需返回。
+ * @param {unknown} value 原始 egress 设置对象 */
+export function publicEgress(value) {
+  const egress = value === null || typeof value !== 'object' || Array.isArray(value) ? {} : value
+  const url = typeof egress.url === 'string' ? egress.url.trim() : ''
+  return {
+    enabled: egress.enabled === true,
+    mode: egress.mode === 'client' ? 'client' : 'subscription',
+    mihomoPath: typeof egress.mihomoPath === 'string' ? egress.mihomoPath : '',
+    hasUrl: url !== '',
+    urlLabel: url === '' ? '' : outletLabel(url),
+  }
 }
 
 function matches(actual, expected) {
@@ -48,6 +63,27 @@ async function readBody(req, limit = MAX_BODY_BYTES) {
   return value
 }
 
+function validateEgress(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw fail(400, 'egress 必须是对象')
+  const patch = {}
+  if (value.enabled !== undefined) {
+    if (typeof value.enabled !== 'boolean') throw fail(400, 'egress.enabled 必须是布尔值')
+    patch.enabled = value.enabled
+  }
+  if (value.mode !== undefined) {
+    if (value.mode !== 'subscription' && value.mode !== 'client') throw fail(400, 'egress 模式必须是 subscription 或 client')
+    patch.mode = value.mode
+  }
+  for (const key of ['url', 'mihomoPath']) {
+    if (value[key] === undefined) continue
+    if (typeof value[key] !== 'string') throw fail(400, `egress.${key} 必须是字符串`)
+    const trimmed = value[key].trim()
+    if (trimmed.length > 2048) throw fail(400, `egress.${key} 过长`)
+    patch[key] = trimmed
+  }
+  return patch
+}
+
 function validateSettings(patch) {
   const visibility = validateModelVisibility(patch)
   const booleans = new Set(['enabled', 'exposeRegionModels', 'streamRecovery', 'standaloneProbe', 'standaloneLanEnabled'])
@@ -55,6 +91,7 @@ function validateSettings(patch) {
   const result = {}
   for (const [key, value] of Object.entries(patch)) {
     if (Object.hasOwn(visibility, key)) { result[key] = visibility[key]; continue }
+    if (key === 'egress') { result.egress = validateEgress(value); continue }
     if (booleans.has(key)) {
       if (typeof value !== 'boolean') throw fail(400, `${key} 必须是布尔值`)
     } else if (Object.hasOwn(numbers, key)) {
@@ -77,11 +114,13 @@ export function managementSettings(value) {
     standaloneLanPort: value.standaloneLanPort ?? 0,
     probeIntervalMinutes: value.probeIntervalMinutes ?? 15,
     defaultMaxTokens: value.defaultMaxTokens ?? 32768,
+    // 订阅 / 代理地址按凭据对待：只回脱敏域名，完整值走按需路由 `/egress/url`。
+    egress: publicEgress(value.egress),
   }
 }
 
 /** 管理读写要求鉴权；登录恢复仅允许同源页面触发固定本机动作。 */
-export function createManagement({ stores, runtime, channels, eac, info, onSettingsChanged, loginTerminal = openLoginTerminal }) {
+export function createManagement({ stores, runtime, channels, eac, info, onSettingsChanged, outlet, loginTerminal = openLoginTerminal }) {
   let bootstrap = { token: crypto.randomBytes(32).toString('base64url'), until: Date.now() + BOOTSTRAP_MS }
   const sessions = new Map()
   let cookieName
@@ -141,6 +180,7 @@ export function createManagement({ stores, runtime, channels, eac, info, onSetti
       channels: channels?.state(),
       eacAuth: eac?.cached(),
       settings: managementSettings(stores.settings.get()),
+      egress: runtime.egress ?? null,
       catalogSyncedAt: stores.settings.get().catalogSyncedAt ?? 0,
       probedAt: available.at ?? 0,
       catalog: state.catalog.map(entry => ({
@@ -242,9 +282,24 @@ export function createManagement({ stores, runtime, channels, eac, info, onSetti
       json(res, 200, result)
     } else if (method === 'POST' && pathname === `${PREFIX}/settings`) {
       const patch = validateSettings(await readBody(req))
+      // egress 是浅合并字段：前端只提交改动的键，与现有对象合并后再落盘。
+      if (patch.egress !== undefined) {
+        const current = stores.settings.get().egress ?? {}
+        const merged = { ...current, ...patch.egress }
+        if (merged.enabled === true && String(merged.url ?? '') === '') throw fail(400, '启用出口需要先填写订阅或代理地址')
+        patch.egress = merged
+      }
       persist(patch)
       await onSettingsChanged()
       json(res, 200, { settings: managementSettings(stores.settings.get()), lan: info().lan })
+    } else if (method === 'GET' && pathname === `${PREFIX}/outlet` && outlet) {
+      // 出口开着时页面轮询它：url-test 选中的节点与它最近一次测速延迟。
+      // 控制器不可达时返回 null，页面保留上一次读数。
+      json(res, 200, (await outlet()) ?? { running: false })
+    } else if (method === 'GET' && pathname === `${PREFIX}/egress/url` && outlet) {
+      // 订阅 / 代理地址是凭据：只由设置页自己发起此请求时按需返回完整值。
+      const value = stores.settings.get().egress ?? {}
+      json(res, 200, { url: typeof value.url === 'string' ? value.url : '' })
     } else if (method === 'GET' && pathname === `${PREFIX}/lan/key`) {
       json(res, 200, { key: stores.settings.get().standaloneLanKey ?? '' })
     } else if (method === 'POST' && pathname === `${PREFIX}/lan/key/rotate`) {

@@ -6,6 +6,7 @@ import crypto from 'node:crypto'
 import { createModelRuntime, createRuntimeStores } from '../../src/core/runtime.js'
 import { generateKey, rankLanAddresses, startForwardServer, startLanRelay } from '../../src/forward.js'
 import { isLoopbackHost } from '../../src/trust.js'
+import { outletLabel, readOutletSelection, startEgressRelay } from '../../src/egress.js'
 import { createManagement } from './management.mjs'
 import { createStandaloneEac } from './eac.mjs'
 import { createChannelRuntime } from './channels/runtime.mjs'
@@ -135,6 +136,19 @@ export async function startStandalone({
   let relayRequestedPort
   let relayError = null
   let relayChanges = Promise.resolve()
+  // ── egress outlet ──────────────────────────────────────────────────────────
+  // The optional proxy outlet (subscription via a managed mihomo, or a single
+  // client proxy), off by default. Mirrors the plugin's `syncEgress` in
+  // index.js: the relay handle is the only owner of the spawned child, and a
+  // settings write reconciles against the last started fingerprint.
+  let outletRelay = null
+  let outletError = ''
+  let outletFingerprint = ''
+  let outletChanges = Promise.resolve()
+  let outletRestartAttempts = 0
+  let outletRestartTimer = null
+  let outletUpSince = 0
+  const OUTLET_STABLE_MS = 120_000
   const lanState = () => {
     const value = stores.settings.get()
     const addresses = rankLanAddresses(os.networkInterfaces())
@@ -156,6 +170,13 @@ export async function startStandalone({
     relayTarget = undefined
     relayRequestedPort = undefined
     await Promise.all([current?.close(), target?.close()])
+  }
+  async function closeOutlet() {
+    await outletChanges
+    const current = outletRelay
+    outletRelay = null
+    outletFingerprint = ''
+    await current?.close().catch(() => {})
   }
   function reconcileRelay() {
     relayChanges = relayChanges.then(async () => {
@@ -215,6 +236,153 @@ export async function startStandalone({
       throw new Error('could not persist the standalone LAN settings')
     }
   }
+  // ── egress outlet reconciliation ───────────────────────────────────────────
+  // Same serialisation gate as the LAN relay: the boot chain and every settings
+  // write call this, and overlapping runs would leak a spawned mihomo (the
+  // loser overwrites `outletRelay` while the winner's child still runs).
+  function reconcileOutlet() {
+    outletChanges = outletChanges.then(async () => {
+      if (stopped) return
+      const desired = stores.settings.get().egress ?? {}
+      const wanted = desired.enabled === true
+      const mode = desired.mode === 'client' ? 'client' : 'subscription'
+      const url = String(desired.url ?? '').trim()
+      const mihomoPath = String(desired.mihomoPath ?? '').trim()
+      const fingerprint = `${mode}\n${url}\n${mihomoPath}`
+      if (outletRelay !== null && wanted && outletFingerprint === fingerprint && !outletRelay.dead) return
+      // 关出口时即使中继从没起来过，也要清掉上一次的启动失败读数，
+      // 否则面板会留着一条与当前「已关闭」状态无关的错误。
+      if (outletRelay === null && !wanted) { outletError = ''; return }
+      if (outletRelay !== null) {
+        const closing = outletRelay
+        outletRelay = null
+        outletFingerprint = ''
+        await closing.close().catch(() => {})
+        // The way out changed under every fetch: re-detect the exit so the
+        // summary and the region verdicts describe the next request's path.
+        void settleOutletWatch()
+      }
+      if (!wanted) {
+        outletError = ''
+        return
+      }
+      if (url === '') {
+        outletError = 'the outlet needs a subscription or proxy URL'
+        logger.warn?.(`our-free-model standalone: egress outlet not started (${outletError})`)
+        return
+      }
+      try {
+        outletRelay = await startEgressRelay({
+          config: () => {
+            const current = stores.settings.get().egress ?? {}
+            return {
+              mode: current.mode === 'client' ? 'client' : 'subscription',
+              url: String(current.url ?? '').trim(),
+              mihomoPath: String(current.mihomoPath ?? '').trim(),
+            }
+          },
+          dataDir,
+          log: message => logger.info?.(`our-free-model egress: ${message}`),
+          onDead: scheduleOutletRestart,
+        })
+        outletFingerprint = fingerprint
+        outletError = ''
+        outletUpSince = Date.now()
+        logger.info?.(`our-free-model standalone: egress outlet up (${outletLabel(url)} via ${mode})`)
+        void settleOutletWatch()
+      } catch (error) {
+        outletError = String(error?.message ?? error)
+        logger.warn?.(`our-free-model standalone: egress outlet could not start (${outletError})`)
+      }
+    })
+    return outletChanges
+  }
+  // A managed mihomo that dies mid-run used to leave the outlet bricked until
+  // the settings page was touched: the relay stays up but its dial port is gone,
+  // so every upstream turn fails. A run that lasted two minutes counts as
+  // healthy and resets the ladder; otherwise a bounded backoff restarts it.
+  function scheduleOutletRestart() {
+    if (stopped || outletRestartTimer !== null) return
+    if (outletRelay === null) return
+    const uptime = Date.now() - outletUpSince
+    outletRestartAttempts = uptime >= OUTLET_STABLE_MS ? 0 : outletRestartAttempts + 1
+    if (outletRestartAttempts > 6) {
+      logger.warn?.('our-free-model standalone: egress outlet restart gave up; toggle it off and on')
+      return
+    }
+    const delay = Math.min(30_000, 500 * 2 ** (outletRestartAttempts - 1))
+    outletRestartTimer = setTimeout(() => {
+      outletRestartTimer = null
+      if (!stopped) void reconcileOutlet().catch(() => {})
+    }, delay)
+    outletRestartTimer.unref?.()
+  }
+  /** What the settings page reads for the outlet's live node and latency. */
+  const outletStatus = async () => {
+    const relay = outletRelay
+    const settings = stores.settings.get().egress ?? {}
+    const url = String(settings.url ?? '').trim()
+    // 启动失败（如找不到 mihomo）时中继是 null，但错误必须送到面板，
+    // 否则用户只看到「未启用」，不知道该去哪里修。
+    if (relay === null) {
+      return {
+        running: false, active: false,
+        mode: settings.mode === 'client' ? 'client' : 'subscription',
+        outlet: url === '' ? '' : outletLabel(url),
+        hasUrl: url !== '',
+        urlLabel: url === '' ? '' : outletLabel(url),
+        mihomoPath: String(settings.mihomoPath ?? '').trim(),
+        node: '', nodeDelayMs: 0, nodeAt: 0,
+        error: outletError,
+      }
+    }
+    const base = {
+      running: true,
+      active: true,
+      mode: relay.mode ?? '',
+      outlet: outletLabel(relay.url ?? ''),
+      hasUrl: url !== '',
+      urlLabel: url === '' ? '' : outletLabel(url),
+      mihomoPath: String(settings.mihomoPath ?? '').trim(),
+      error: outletError !== '' ? outletError : (relay.dead ?? ''),
+    }
+    try {
+      const selection = await readOutletSelection(relay)
+      return { ...base, node: selection?.node ?? '', nodeDelayMs: selection?.delayMs ?? 0, nodeAt: Date.now() }
+    } catch (error) {
+      return { ...base, node: '', nodeDelayMs: 0, nodeAt: 0, error: String(error?.message ?? error) }
+    }
+  }
+  // Re-detect the egress IP after the outlet changes: `egress` on the runtime is
+  // the last probe's reading, and a new outlet means a new exit. The probe runs
+  // through `egressFetch`, so it only carries the new outlet once the relay is
+  // up. The watch gives a cold outlet a few rounds to answer before the verdicts
+  // are regrouped, so a freshly started mihomo cannot misjudge models.
+  const settleOutletWatch = async () => {
+    let lastError
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (stopped) return
+      await new Promise(resolve => setTimeout(resolve, attempt === 0 ? 2_500 : 5_000))
+      if (stopped || outletRelay === null) return
+      try {
+        if (await runtime.watchEgress()) {
+          // The exit answers, but url-test may not have ranked a node yet: read
+          // the selection now, and once more a beat later so the settings page
+          // does not sit on an empty node until the next periodic tick.
+          await outletStatus().catch(() => {})
+          const later = setTimeout(() => { void outletStatus().catch(() => {}) }, 5_000)
+          later.unref?.()
+          return
+        }
+      } catch (error) {
+        lastError = error
+      }
+    }
+    logger.warn?.(
+      `our-free-model standalone: egress changed but the new exit never answered; leaving verdicts alone`
+      + (lastError ? ` (${lastError?.message ?? lastError})` : ''),
+    )
+  }
   try {
     stores = createRuntimeStores({ dataDir, logger })
     const { settings } = stores
@@ -257,6 +425,7 @@ export async function startStandalone({
     }
     management = createManagement({
       stores, runtime, channels, eac,
+      outlet: outletStatus,
       info: () => ({
         product: PRODUCT, version: VERSION, dataDir,
         baseUrl: `http://${host === '::1' ? '[::1]' : host}:${listener?.port ?? requestedPort}`,
@@ -267,7 +436,7 @@ export async function startStandalone({
       }),
       onSettingsChanged: async () => {
         if (!refreshInFlight) scheduleRefresh()
-        await reconcileRelay()
+        await Promise.all([reconcileRelay(), reconcileOutlet()])
       },
     })
     listener = await startForwardServer({
@@ -284,7 +453,7 @@ export async function startStandalone({
     management.setPort(listener.port)
     settings.update({ standalonePort: listener.port })
     settings.flush()
-    await reconcileRelay()
+    await Promise.all([reconcileRelay(), reconcileOutlet()])
 
     function scheduleRefresh() {
       clearTimeout(timer)
@@ -316,13 +485,14 @@ export async function startStandalone({
         if (closing !== undefined) return closing
         stopped = true
         clearTimeout(timer)
+        if (outletRestartTimer !== null) clearTimeout(outletRestartTimer)
         management.dispose()
         eac.dispose()
         runtime.dispose()
         closing = (async () => {
           try {
             await relayChanges
-            await Promise.all([closeRelay(), listener.close(), channels.close()])
+            await Promise.all([closeRelay(), closeOutlet(), listener.close(), channels.close()])
           } finally {
             try { stores.dispose() } finally { await releaseLock() }
           }
@@ -333,11 +503,16 @@ export async function startStandalone({
   } catch (error) {
     stopped = true
     clearTimeout(timer)
+    if (outletRestartTimer !== null) clearTimeout(outletRestartTimer)
     management?.dispose()
     eac?.dispose()
     runtime?.dispose()
     await relayChanges
     await closeRelay()
+    await outletChanges
+    const current = outletRelay
+    outletRelay = null
+    await current?.close().catch(() => {})
     if (listener) await listener.close()
     await channels?.close()
     try { stores?.dispose() } finally { await releaseLock() }

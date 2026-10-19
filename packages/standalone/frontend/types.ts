@@ -14,6 +14,33 @@ export interface Model {
   ttftMs?: number | null
 }
 export interface ModelTestResult { ok: boolean; text: string; latencyMs: number }
+/** 出口设置写入载荷：面板只提交改动的键，地址留空即保持原值。 */
+export interface EgressPatch {
+  enabled?: boolean
+  mode?: 'subscription' | 'client'
+  url?: string
+  mihomoPath?: string
+}
+export interface EgressSettings {
+  enabled: boolean
+  mode: 'subscription' | 'client'
+  /** 脱敏域名，如 `https://host/…`；完整值只存在于设置文件与本机内存中。 */
+  hasUrl: boolean
+  urlLabel: string
+  mihomoPath: string
+}
+export interface OutletStatus {
+  running: boolean
+  active?: boolean
+  mode?: string
+  outlet?: string
+  node?: string
+  nodeDelayMs?: number
+  nodeAt?: number
+  latencyMs?: number
+  latencyAt?: number
+  error?: string
+}
 export interface ServiceSettings {
   enabled: boolean
   exposeRegionModels: boolean
@@ -24,6 +51,7 @@ export interface ServiceSettings {
   standaloneProbe: boolean
   probeIntervalMinutes: number
   defaultMaxTokens: number
+  egress?: EgressSettings
 }
 export interface Summary {
   version: string
@@ -75,5 +103,9 @@ export interface Host {
   error(error: Error): void
   testModel(model: string, signal: AbortSignal): Promise<ModelTestResult>
   refreshModels(probe: boolean, signal: AbortSignal): Promise<void>
-  saveSettings(settings: Partial<ServiceSettings>): Promise<ServiceSettings>
+  saveSettings(settings: Omit<Partial<ServiceSettings>, 'egress'> & { egress?: EgressPatch }): Promise<ServiceSettings>
+  /** 出口代理：完整订阅 / 代理地址按需取用（设置页自己发起）。 */
+  getEgressUrl(): Promise<string>
+  /** 出口代理：当前最佳节点与延迟读数。 */
+  readOutlet(): Promise<OutletStatus>
 }

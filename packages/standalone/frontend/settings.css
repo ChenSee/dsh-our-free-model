@@ -945,3 +945,10 @@ label.settings-field { cursor: pointer; }
   [data-theme="dark"] .settings-browser .settings-number::before,
   [data-theme="dark"] .connection-browser .cx-field::before { transition: none !important; }
 }
+
+/* ---------- 9. 出口代理 ---------- */
+.settings-url-actions { display: flex; flex-wrap: wrap; gap: 8px; flex-shrink: 0; }
+.settings-mono { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; padding: 4px 8px; border-radius: 4px; background: var(--amber-soft); border: 1px solid var(--amber-line); color: var(--amber-ink); word-break: break-all; }
+.settings-status-row { cursor: default; }
+.settings-status-row .settings-mono { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.settings-field .settings-number input::placeholder { color: var(--muted); opacity: 0.75; }
