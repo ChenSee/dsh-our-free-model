@@ -1,0 +1,100 @@
+name: build-windows
+
+# 在 Windows 上构建 Our Free Model 桌面壳（Electron 实现）的 NSIS 安装包，
+# 未签名（社区/自用的 Windows 安装包）。手动触发，或在打 v* 标签时自动构建
+# 并把安装包作为 Release 资产上传。
+#
+# 与 build-macos.yml 的区别：
+# - macOS 用 Tauri（packages/desktop），本工作流用 Electron（packages/desktop-electron）
+# - Electron 安装包需要把独立服务与 Node 运行时打进 extraResources，因此额外执行
+#   `node scripts/prepare-desktop.mjs`（必须在 Windows/macOS runner 上跑，它把当前
+#    Node 拷进 runtime/ 并生成 service/）
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      # 仓库根依赖（与 test.yml 一致，跳过生命周期脚本，避免触发签名/目录写入）。
+      - name: Install root dependencies
+        run: npm install --ignore-scripts
+
+      # 构建独立前端（packages/standalone/web 是打包进安装包的服务界面资源）。
+      - name: Build standalone UI
+        run: |
+          npm --prefix packages/standalone ci
+          node scripts/build-standalone-ui.mjs
+
+      # 生成桌面资源：把独立服务与 Node 运行时打进
+      # packages/desktop/src-tauri/resources/{service,runtime}，供 electron-builder
+      # 作为 extraResources 打入安装包。必须在 Windows runner 上执行。
+      - name: Stage desktop service + Node runtime
+        run: node scripts/prepare-desktop.mjs
+
+      # 安装 Electron 桌面壳依赖（electron / electron-builder / sharp）。
+      - name: Install electron desktop dependencies
+        run: npm --prefix packages/desktop-electron ci
+
+      # 构建 Windows NSIS 安装包（build-icons → prepare-electron → electron-builder）。
+      - name: Build Windows installer
+        env:
+          CI: true
+        run: npm --prefix packages/desktop-electron run dist
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ofm-desktop-windows
+          path: packages/desktop-electron/dist/*Setup*.exe
+          if-no-files-found: error
+          retention-days: 7
+
+      # 仅打标签时发布为 Release 资产。与 build-macos 共用同一标签名，故采用
+      # 「先建后补」的容错：macOS 工作流若已建好同名 Release，则直接上传资产。
+      # 用 bash（windows-latest 自带 Git Bash）写说明，避免 PowerShell here-string 的缩进陷阱。
+      - name: Publish installer as a release asset (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          exe=$(ls packages/desktop-electron/dist/*Setup*.exe | head -1)
+          sha=$(sha256sum "$exe" | awk '{print $1}')
+          version=$(node -p "require('./packages/desktop-electron/package.json').version")
+          arch=$(uname -m)
+          cat > release-notes.md <<NOTES
+          ## Windows 桌面安装包 / Windows desktop installer
+
+          由本仓库 GitHub Actions 在 Windows runner 上从公开源码构建，可审计、可复现。
+
+          This installer is built by GitHub Actions from public, auditable source on a Windows runner.
+
+          | 项 / Item | 值 / Value |
+          |---|---|
+          | 版本 / Version | ${version} |
+          | 架构 / Arch | ${arch} |
+          | 构建来源 / Source | ${{ github.ref_name }} @ ${{ github.sha }} |
+
+          ### 安装 / Install
+
+          运行 <code>Our Free Model Setup ${version}.exe</code>，按向导完成安装。安装包未做代码签名（自用 / 社区构建），部分杀毒软件可能误报，属正常现象。
+
+          The package is unsigned (personal / community build); some antivirus tools may flag it. This is expected.
+
+          ---
+          - 构建记录 / CI run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          - SHA256: ${sha}
+          NOTES
+          gh release create "${{ github.ref_name }}" "$exe" --title "$version Windows" --notes-file release-notes.md --target "${{ github.sha }}" || gh release upload "${{ github.ref_name }}" "$exe" --clobber
