@@ -40,9 +40,9 @@
 ## Community
 
 <div align="center">
-  <img src="docs/images/qq-group-1073656316.png" alt="QR code for ai技术交流群3 (QQ group: 1073656316)" width="300">
+  <img src="docs/images/qq-group-571344798.png" alt="QR code for ai技术交流群4 (QQ group: 571344798)" width="300">
   <br>
-  <b>QQ group: 1073656316 (ai技术交流群3)</b>
+  <b>QQ group: 571344798 (ai技术交流群4)</b>
   <br>
   Scan the QR code or search for the group number to join, discuss the plugin, report issues and share tips.
 </div>
@@ -137,7 +137,7 @@ and installation contract rather than assuming every desktop shell shares this g
 To install manually as a real directory, use a trusted local tarball:
 
 1. Create `<DSH_HOME>/profiles/<profile>/vendor/`. From the reviewed repository, run `npm pack --ignore-scripts --pack-destination "<DSH_HOME>/profiles/<profile>/vendor"`, or place an official same-version release tarball from this repository there. Local packing does not publish to npm.
-2. Add `"dsh-our-free-model": "file:./vendor/dsh-our-free-model-2.5.6.tgz"` to the profile's `package.json` dependencies, then use the host's installation flow to resolve it. Keep the filename version aligned with this repository's `package.json`; do not substitute a same-named npm registry version.
+2. Add `"dsh-our-free-model": "file:./vendor/dsh-our-free-model-2.5.7.tgz"` to the profile's `package.json` dependencies, then use the host's installation flow to resolve it. Keep the filename version aligned with this repository's `package.json`; do not substitute a same-named npm registry version.
 3. Append `"dsh-our-free-model"` to `dsh.profile.bundles`.
 
 When the package manager owns the installed bytes, set `distribution: 'managed'` in the bundle config or plugin `settings.json`. The package manager then handles updates; in-app upgrades, announcement polling and hot reload stand down while model access remains available. For later updates, replace the trusted tarball and update its dependency path so the old lockfile cannot restore an older copy.
