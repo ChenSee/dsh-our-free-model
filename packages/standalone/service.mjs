@@ -433,6 +433,10 @@ export async function startStandalone({
       state: () => ({ ...core.state(), catalog: [...core.catalog, ...channels.publicModelRows()] }),
       publicModelRows: () => [...core.publicModelRows(), ...channels.publicModelRows()],
       complete: (request, onChunk) => channels.handles(request.model) ? channels.complete(request, onChunk) : core.complete(request, onChunk),
+      // `...core` 带过来的 testModel 只在自己的目录里查 id，而渠道行是上面
+      // 才拼进 catalog 的 —— 不在这里分派，页面列出的渠道模型一点「测一次」
+      // 就会得到 Unknown model。分派规则与 complete 保持同一优先级。
+      testModel: (id, effort, options) => channels.handles(id) ? channels.testModel(id, options) : core.testModel(id, effort, options),
       async refreshCatalog(options) {
         if (stopped) return
         await Promise.all([core.refreshCatalog(options), channels.refresh().catch(error => { if (!stopped) throw error })])

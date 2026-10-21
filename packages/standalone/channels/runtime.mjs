@@ -74,12 +74,13 @@ export async function createChannelRuntime({ dataDir, logger = console, stats })
     refreshing = call('models').then(value => { rows = value; return rows }).finally(() => { refreshing = undefined })
     return refreshing
   }
+  const handles = model => providers.some(provider => model.startsWith(`${provider}/`))
   const runtime = {
     get providers() { return providers },
     state() { return { state: failed ? 'failed' : 'ready', error: failed ? failed.message : '' } },
     publicModelRows: () => rows,
     refresh,
-    handles: model => providers.some(provider => model.startsWith(`${provider}/`)),
+    handles,
     async rpc(body, signal) {
       if (typeof body?.method !== 'string' || !Object.hasOwn(body, 'payload')) throw Object.assign(new Error('渠道请求缺少 method 或 payload'), { statusCode: 400 })
       return call('rpc', { call: { method: body.method, payload: body.payload } }, signal, undefined, 10 * 60000)
@@ -110,6 +111,61 @@ export async function createChannelRuntime({ dataDir, logger = console, stats })
           })
           recordTurn(stats, { model: request.model, ok, recovered: false })
         }
+      }
+    },
+    /**
+     * 设置页的「测一次」。渠道行只存在于 worker 的清单里，核心目录并不认识
+     * 这些 `provider/model` id，所以 core.testModel 会直接报 Unknown model。
+     * 这里走同一条 worker 通道发一次真实的最小生成，返回值形状与
+     * core.testModel 对齐，前端无需区分行的来源。
+     */
+    async testModel(model, { signal } = {}) {
+      if (!handles(model)) throw Object.assign(new Error('Unknown model "' + model + '"'), { status: 404 })
+      const started = Date.now()
+      let first = 0
+      let ok = false
+      const outcome = { text: '', toolCalls: [], usage: undefined, truncated: false, error: undefined }
+      try {
+        await call('complete', {
+          request: { model, messages: [{ role: 'user', content: 'Reply with exactly: OK' }] },
+        }, signal, chunk => {
+          if (!first && (chunk?.type === 'text-delta' || chunk?.type === 'reasoning-delta')
+            && typeof chunk.text === 'string' && chunk.text.length > 0) first = Date.now()
+          foldForwardOutcome(outcome, chunk)
+        }, 300000)
+        if (outcome.error !== undefined) throw new Error(outcome.error)
+        if (outcome.toolCalls.length > 0) throw new Error('Text test returned an unexpected tool call')
+        if (!outcome.text.trim()) throw new Error('Text test returned no response text')
+        ok = true
+      } catch (error) {
+        // 停用或不存在的模型在 worker 里是 statusCode 404；管理接口按 `status` 映射 HTTP 码。
+        if (error?.statusCode === 404) throw Object.assign(new Error(error.message), { status: 404 })
+        throw error
+      } finally {
+        if (!closed && stats) {
+          const usage = outcome.usage
+          const ended = Date.now()
+          recordUsage(stats, {
+            model, at: ended, input: usage?.prompt_tokens ?? 0, output: usage?.completion_tokens ?? 0,
+            reasoning: usage?.completion_tokens_details?.reasoning_tokens ?? 0, cacheRead: usage?.prompt_tokens_details?.cached_tokens ?? 0,
+            ok, origin: 'bench', ttftMs: first ? first - started : undefined,
+            decodeMs: first ? ended - first : 0, decodeTokens: usage?.completion_tokens ?? 0,
+            noUsage: usage === undefined, elapsedMs: ended - started, aborted: signal?.aborted === true,
+          })
+          recordTurn(stats, { model, ok, recovered: false })
+        }
+      }
+      const ended = Date.now()
+      const usage = outcome.usage
+      const outputTokens = usage?.completion_tokens ?? 0
+      const decodeMs = first ? ended - first : 0
+      return {
+        model, ok: true,
+        totalMs: ended - started, latencyMs: ended - started,
+        ttftMs: first ? first - started : ended - started,
+        outputTokens, reasoningTokens: usage?.completion_tokens_details?.reasoning_tokens ?? 0,
+        tokensPerSecond: decodeMs > 0 && outputTokens > 0 ? Math.round((outputTokens * 1000) / decodeMs) : null,
+        sample: outcome.text.slice(0, 60), text: outcome.text.slice(0, 2000),
       }
     },
     close() {
