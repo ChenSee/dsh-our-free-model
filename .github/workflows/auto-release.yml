@@ -123,26 +123,26 @@ jobs:
         if: steps.detect.outputs.skip != 'true'
         run: npm run manifest:check
 
-      # 只改 version 那一行，避免 JSON.stringify 把整份文件重排。
-      - name: Align desktop shell version
+      # 两处版本都要对齐：
+      # - packages/desktop-electron：安装包自己的版本（exe 文件名、Release 标题）
+      # - packages/standalone：管理界面左下角显示的 vX.Y.Z 来自这里
+      # 只对齐前者，就会出现「装的是 2.5.8、界面写 2.5.6」。npm version 会同时更新
+      # package.json 与 package-lock.json 里的自身版本，且不改动文件格式。
+      - name: Align package versions
         if: steps.detect.outputs.skip != 'true'
         env:
           VERSION: ${{ steps.detect.outputs.version }}
         run: |
           set -euo pipefail
-          node -e '
-            const fs = require("fs")
-            const file = "packages/desktop-electron/package.json"
-            const text = fs.readFileSync(file, "utf8")
-            const next = text.replace(/"version":\s*"[^"]+"/, `"version": "${process.env.VERSION}"`)
-            if (next === text) console.log("版本已是 " + process.env.VERSION)
-            else fs.writeFileSync(file, next)
-          '
-          if git diff --quiet -- packages/desktop-electron/package.json; then
-            echo "无需提交版本变更"
+          for pkg in packages/desktop-electron packages/standalone; do
+            npm --prefix "$pkg" version "$VERSION" --no-git-tag-version --allow-same-version
+          done
+          if git diff --quiet -- packages/desktop-electron packages/standalone; then
+            echo "版本已是 ${VERSION}，无需提交"
           else
-            git add packages/desktop-electron/package.json
-            git commit -m "chore(desktop): 发布准备——版本号对齐 ${VERSION}"
+            git add packages/desktop-electron/package.json packages/desktop-electron/package-lock.json \
+                    packages/standalone/package.json packages/standalone/package-lock.json
+            git commit -m "chore(release): 版本号对齐 ${VERSION}（桌面壳 + 独立服务界面）"
           fi
 
       # release-sign 可能刚往 main 推了重签提交，所以推之前先对齐一次；
