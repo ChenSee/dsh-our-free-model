@@ -1,14 +1,23 @@
-name: auto-release
+name: release
 
-# 上游发版 → 自动出 Windows 桌面安装包，全流程无人值守。
+# 手动发版：把当前 main 打成 v<版本> 标签，并出 Windows 桌面安装包。
 #
-# 触发：
-# - push 到 main（在 GitHub 上点「Sync fork」会立刻走到这里）
-# - 每 30 分钟定时兜底（cron 最小粒度 5 分钟，实际常有延迟）
-# - 手动 workflow_dispatch，force 可跳过版本判断（排障用）
+# 为什么不再自动跟上游（2026-10-23 起）：
+# 上游会把账号渠道删掉 —— #555 移除两端 WorkBuddy、#577 彻底移除旧产品实现、
+# #585 移除华为云 CodeArts，账号渠道从 13 个砍到 10 个。本仓库要保留
+# CodeArts / CodeBuddy / WorkBuddy 三条车道，而原先的 auto-release 每 30 分钟
+# curl 一次上游版本、并无人值守 `git merge upstream/main`，等于让上游的删除自动
+# 覆盖本地的恢复。现在合并上游是人工决定，这个工作流只负责「把当前 main 发出去」：
+# 不读上游版本、不 merge upstream、没有定时任务。
 #
-# 流程：检测上游版本 → 合并上游 main → contributor 测试门禁 + 清单一致性校验 →
-# 桌面壳版本对齐 → 推 main → 打 v<版本> 标签 → 触发 build-windows 构建并发布 Release。
+# 触发：只有 workflow_dispatch（Actions 页面点 Run workflow，或
+# `gh workflow run release.yml -R ChenSee/dsh-our-free-model`）。
+#
+# 版本来源：仓库根 package.json 的 version（不再是上游的 package.json）。
+# 想发新版本就先改根 package.json 的 version，再手动跑本工作流。
+#
+# 流程：读本地版本 → contributor 测试门禁 + 清单一致性校验 → 对齐桌面壳与独立端
+# 版本 → 推 main → 打 v<版本> 标签 → 触发 build-windows 构建并发布 Release。
 #
 # 为什么构建要显式触发一次：GITHUB_TOKEN 推 tag 产生的事件不会再创建新的
 # workflow run（GitHub 的防递归规则），而 workflow_dispatch 是官方例外。所以这里
@@ -16,14 +25,10 @@ name: auto-release
 # 仍然保留，将来换成 PAT 推 tag 时也不会重复构建（gh 触发的那次带同一个 ref，
 # 两者只会有一次 run，因为 tag push 根本不会触发）。
 on:
-  push:
-    branches: [main]
-  schedule:
-    - cron: '*/30 * * * *'
   workflow_dispatch:
     inputs:
       force:
-        description: 版本未变也强制走一遍（排障用）
+        description: 标签 v<版本> 已存在也强制重发（排障用，会移动标签）
         type: boolean
         default: false
 
@@ -31,18 +36,13 @@ permissions:
   contents: write
   actions: write
 
-# 定时与 push 可能同时到；串行化，避免两次合并/两个同名 tag 撞车。
 concurrency:
-  group: auto-release
+  group: release
   cancel-in-progress: false
 
 jobs:
   release:
     runs-on: ubuntu-latest
-    # 本工作流自己推 main 也会触发 push 事件，用 actor 把这一圈挡掉。
-    if: github.event_name != 'push' || github.actor != 'github-actions[bot]'
-    env:
-      UPSTREAM: Ebony-Vinyl/dsh-our-free-model
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -52,58 +52,27 @@ jobs:
         with:
           node-version: 22
 
-      # 上游的发布版本就是它根 package.json 的 version；本仓库用桌面壳的 version
-      # 追这个号（v2.5.6 / v2.5.7 / v2.5.8 都是这个约定）。只比数字段，够用且不引依赖。
-      - name: Detect upstream version
+      # 版本只看本仓库根 package.json。同名标签已经存在就不再发（幂等），
+      # 需要重发得显式勾 force —— 那时候会移动标签。
+      - name: Detect local version
         id: detect
         run: |
           set -euo pipefail
-          upstream=$(curl -fsSL --retry 3 "https://raw.githubusercontent.com/${UPSTREAM}/main/package.json" \
-            | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version")
-          local=$(node -p "require('./packages/desktop-electron/package.json').version")
-          echo "upstream=$upstream local=$local"
-          newer=$(node -e '
-            const cmp = (a, b) => {
-              const x = a.split(".").map(Number), y = b.split(".").map(Number)
-              for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0)
-              return 0
-            }
-            console.log(cmp(process.argv[1], process.argv[2]) > 0 ? "yes" : "no")
-          ' "$upstream" "$local")
-          {
-            echo "version=$upstream"
-            echo "local=$local"
-          } >> "$GITHUB_OUTPUT"
-          if [ "$newer" != "yes" ] && [ "${{ inputs.force }}" != "true" ]; then
+          version=$(node -p "require('./package.json').version")
+          echo "local=$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "${{ inputs.force }}" != "true" ] \
+             && git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null 2>&1; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "上游 $upstream 不高于本地 $local，跳过"
-            exit 0
-          fi
-          # 同名标签已经存在就不再发（上游 re-sign 同版本、或上次已发过）。
-          if git ls-remote --exit-code --tags origin "refs/tags/v$upstream" >/dev/null 2>&1; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "v$upstream 已存在，跳过"
+            echo "v$version 已存在，跳过（要重发请勾选 force）"
             exit 0
           fi
           echo "skip=false" >> "$GITHUB_OUTPUT"
 
-      - name: Merge upstream main
-        if: steps.detect.outputs.skip != 'true'
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git remote add upstream "https://github.com/${UPSTREAM}.git" 2>/dev/null || true
-          git fetch --no-tags upstream main
-          if ! git merge --no-edit upstream/main; then
-            echo "::error::与上游合并冲突，未发版。请本地解决冲突后重跑本工作流。"
-            git diff --name-only --diff-filter=U | sed 's/^/  冲突文件：/'
-            exit 1
-          fi
-
       # 门禁放在打标签之前：发出去的安装包必须过 contributor 全量测试，
-      # 并且签名清单要仍然描述当前树（桌面壳的 package.json 不在清单覆盖范围内，
-      # 所以版本对齐不会让清单漂移；这里防的是上游带来未签的文件变化）。
+      # 并且签名清单要仍然描述当前树（桌面壳与独立端的 package.json 不在清单
+      # 覆盖范围内，所以版本对齐不会让清单漂移；这里防的是有未重签的文件变化）。
+      # 清单漂移时先让 main 上的 release-sign 跑完再发。
       - name: Install root dependencies
         if: steps.detect.outputs.skip != 'true'
         run: npm install --ignore-scripts
@@ -170,8 +139,12 @@ jobs:
           VERSION: ${{ steps.detect.outputs.version }}
         run: |
           set -euo pipefail
-          git tag -a "v${VERSION}" -m "Our Free Model ${VERSION}（Windows 桌面安装包，基于上游 v${VERSION} 合并 + 桌面端）"
-          git push origin "v${VERSION}"
+          # force 重发时标签可能已存在：先删本地再重建，推送用 --force 覆盖远端。
+          if git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null; then
+            git tag -d "v${VERSION}"
+          fi
+          git tag -a "v${VERSION}" -m "Our Free Model ${VERSION}（Windows 桌面安装包，含 CodeArts / CodeBuddy / WorkBuddy 渠道）"
+          git push --force origin "v${VERSION}"
 
       # GITHUB_TOKEN 推的 tag 不会触发 build-windows，这里显式触发一次。
       - name: Trigger Windows build
@@ -179,10 +152,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.detect.outputs.version }}
-        # 必须显式 -R：合并步骤用 `git remote add upstream` 加了上游仓库，
-        # gh 从 git remote 解析仓库时会命中 upstream（Ebony-Vinyl），而上游没有
-        # fork 独有的 build-windows.yml，导致 HTTP 404。$GITHUB_REPOSITORY 恒等于
-        # 本工作流所在的 fork（ChenSee），用它钉死目标仓库。
+        # 必须显式 -R：gh 从 git remote 解析仓库，历史上曾命中上游
+        # （Ebony-Vinyl）而上游没有 build-windows.yml，导致 HTTP 404。
+        # $GITHUB_REPOSITORY 恒等于本工作流所在的 fork（ChenSee），用它钉死目标仓库。
         run: gh workflow run build-windows.yml -R "$GITHUB_REPOSITORY" --ref "v${VERSION}"
 
       - name: Summary
@@ -193,7 +165,7 @@ jobs:
         run: |
           {
             if [ "$SKIP" = "true" ]; then
-              echo "### 跳过：上游版本没有前进，或 v${VERSION} 已发布"
+              echo "### 跳过：v${VERSION} 已发布（需要重发请勾选 force）"
             else
               echo "### 已发版 v${VERSION}"
               echo ""
