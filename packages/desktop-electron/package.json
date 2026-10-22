@@ -1,6 +1,6 @@
 {
   "name": "our-free-model-desktop-electron",
-  "version": "2.5.8",
+  "version": "2.5.9",
   "description": "Our Free Model 独立服务的 Windows 桌面壳（Electron 实现，与 Tauri 版行为一致）",
   "main": "main.js",
   "private": true,
