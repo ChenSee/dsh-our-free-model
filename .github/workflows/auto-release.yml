@@ -179,7 +179,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.detect.outputs.version }}
-        run: gh workflow run build-windows.yml --ref "v${VERSION}"
+        # 必须显式 -R：合并步骤用 `git remote add upstream` 加了上游仓库，
+        # gh 从 git remote 解析仓库时会命中 upstream（Ebony-Vinyl），而上游没有
+        # fork 独有的 build-windows.yml，导致 HTTP 404。$GITHUB_REPOSITORY 恒等于
+        # 本工作流所在的 fork（ChenSee），用它钉死目标仓库。
+        run: gh workflow run build-windows.yml -R "$GITHUB_REPOSITORY" --ref "v${VERSION}"
 
       - name: Summary
         if: always()
