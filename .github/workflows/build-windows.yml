@@ -64,11 +64,18 @@ jobs:
       # 仅打标签时发布为 Release 资产。与 build-macos 共用同一标签名，故采用
       # 「先建后补」的容错：macOS 工作流若已建好同名 Release，则直接上传资产。
       # 用 bash（windows-latest 自带 Git Bash）写说明，避免 PowerShell here-string 的缩进陷阱。
+      #
+      # 为什么用 PAT 而不是内置 GITHUB_TOKEN：本仓库是 fork，GitHub 硬限制
+      # fork 工作流的 GITHUB_TOKEN 不能通过 API 创建 Release（即便授予
+      # contents:write，POST /releases 仍报 HTTP 403 "Resource not accessible
+      # by integration"）。因此优先用仓库 Secret RELEASE_PAT（需 repo 权限）；
+      # 未配置时回退内置 token —— 那种情况下发布步骤会 403 失败，但安装包仍作为
+      # workflow artifact 保留，可事后手动发布。
       - name: Publish installer as a release asset (tag builds only)
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RELEASE_PAT || github.token }}
         run: |
           exe=$(ls packages/desktop-electron/dist/*Setup*.exe | head -1)
           sha=$(sha256sum "$exe" | awk '{print $1}')
