@@ -1,5 +1,5 @@
 {
-  "version": "2.5.9",
+  "version": "2.5.9-fix",
   "algorithm": "sha256",
   "files": [
     {
@@ -14,8 +14,8 @@
     },
     {
       "path": "client.js",
-      "size": 508469,
-      "sha256": "5c71baca0a655d5b71cba1529725d5d44acec93c0ee440f3af31ad74b02f5ca2"
+      "size": 536532,
+      "sha256": "6ec7e171bdf07d460bd770c6beed418e63e73dc48d1254062673b230d9e6e1c9"
     },
     {
       "path": "cordis.patch.yml",
@@ -29,8 +29,8 @@
     },
     {
       "path": "index.js",
-      "size": 112937,
-      "sha256": "13ada5d9d54d8f2c30f2431de758154e3c3c07bd4be19f2a7c2865a1de561fcb"
+      "size": 113071,
+      "sha256": "ba7b8f4f8b3ff4eb5e679e44cb697684a1a224000428a5ed57871d2a203329b9"
     },
     {
       "path": "LICENSE",
@@ -49,8 +49,8 @@
     },
     {
       "path": "package.json",
-      "size": 2927,
-      "sha256": "fc101b03acbb819b0e47c7b81537f122470902d553746746ed41824f1c4d8113"
+      "size": 2990,
+      "sha256": "823b4e666effdef41802c852d64fa693162601b5caababbfff004f1fc11a6d02"
     },
     {
       "path": "src/adapter.js",
@@ -129,8 +129,8 @@
     },
     {
       "path": "src/egress.js",
-      "size": 37453,
-      "sha256": "2a444aea0a59a8dce1cbd85c72e6d1fa97c6a289934018fdaea997edebfd692d"
+      "size": 37623,
+      "sha256": "3ec85ab5865498469a372dc9a1f3436b879c8f219ad9f7f867c9bca1ce23ec7a"
     },
     {
       "path": "src/failure.js",
@@ -360,7 +360,7 @@
     {
       "path": "src/updater.js",
       "size": 50925,
-      "sha256": "6dbbd82b6dab3788bead5f1792c825bf2f979b6802848ce566143ea14aef123d"
+      "sha256": "2e9f1e42a944bbdf284af163b96e7467d8684bdd24f74532af132a33f7e532b7"
     },
     {
       "path": "src/upstream.js",
@@ -389,13 +389,13 @@
     },
     {
       "path": "vendor/channel-pack/NOTICE.md",
-      "size": 3426,
-      "sha256": "e943ad8a7aa09b5fdbcba63ca9e8bfa90a38b6653bdcf1db37b9370f2a3dff3d"
+      "size": 3542,
+      "sha256": "a6cad78e702a992511f24863350eef53bda78773c868d933f3dc44dbb5931ab9"
     },
     {
       "path": "vendor/channel-pack/pack.js",
-      "size": 2592919,
-      "sha256": "0a70f2ab6396154121663aa79dddf1fe50710686c61bd6aad3abcb5b9b20592c"
+      "size": 2920816,
+      "sha256": "8a753be5ee53d25cef5930cab327bf315260d6ea5d714d6d5a3cbb82fa5ff3e1"
     },
     {
       "path": "vendor/channel-pack/qoder-auth-wasm.wasm",
