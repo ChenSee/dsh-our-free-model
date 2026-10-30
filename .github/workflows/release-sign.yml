@@ -73,18 +73,19 @@ jobs:
         run: node scripts/test-all.mjs --mode release
       - name: Commit and push the refreshed records
         env:
-          # GITHUB_TOKEN is a ruleset outsider: main demands PRs and green
-          # checks from it. The push token belongs to a bypass holder, so the
-          # push lands as theirs; a fine-grained PAT scoped to this repo is
-          # the intended long-term value for this secret.
-          PUSH_TOKEN: ${{ secrets.OFM_RELEASE_PUSH_TOKEN }}
+          # On the upstream repository, GITHUB_TOKEN is a ruleset outsider: main
+          # demands PRs and green checks from it, so the re-sign push has to land
+          # as a bypass holder (a fine-grained PAT scoped to this repo). Forks
+          # carry no such ruleset — and no PAT secret — so fall back to the job
+          # token instead of failing on a gate this repository does not have.
+          PUSH_TOKEN: ${{ secrets.OFM_RELEASE_PUSH_TOKEN || github.token }}
         run: |
           if git diff --quiet -- feed/manifest.json catalog/integrity.json catalog/dsh-plugin.json catalog/provenance.json; then
             echo "the committed manifest describes this tree — nothing to push"
             exit 0
           fi
           if [ -z "$PUSH_TOKEN" ]; then
-            echo '::error::OFM_RELEASE_PUSH_TOKEN is not set — the re-signed records cannot reach main'
+            echo '::error::no push credentials — set OFM_RELEASE_PUSH_TOKEN (a PAT owned by a ruleset bypass holder)'
             exit 1
           fi
           git config user.name "github-actions[bot]"
