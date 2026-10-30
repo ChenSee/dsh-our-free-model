@@ -233,11 +233,22 @@ function parseQuota(provider, body, now, plan = null) {
   return quota
 }
 
+// `whoami` is invariant for the life of the process, yet it used to be spawned
+// before every `icacls` — twice per credential save. On Windows a spawn costs
+// ~200 ms, and a busy store saves repeatedly, so the lookup is memoized.
+let cachedUser
+function currentUser(system32) {
+  if (cachedUser === undefined) {
+    cachedUser = execFileSync(path.join(system32, 'whoami.exe'), [],
+      { encoding: 'utf8', windowsHide: true, shell: false }).trim()
+  }
+  return cachedUser
+}
+
 function privatePermissions(file, directory = false) {
   if (process.platform === 'win32') {
     const system32 = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32')
-    const user = execFileSync(path.join(system32, 'whoami.exe'), [],
-      { encoding: 'utf8', windowsHide: true, shell: false }).trim()
+    const user = currentUser(system32)
     execFileSync(path.join(system32, 'icacls.exe'),
       [file, '/inheritance:r', '/grant:r', `${user}:${directory ? '(OI)(CI)F' : 'F'}`],
       { stdio: 'ignore', windowsHide: true, shell: false })

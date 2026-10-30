@@ -23,23 +23,38 @@ export function stageDesktopService(destination, { requireWorkspace = false } = 
       else if (entry.isFile() && allowed(child)) copy(child)
     }
   }
-  tree('src', file => /\.(js|json)$/.test(file))
+  // The model workspace runs the same pinned engine the plugin ships, so the
+  // desktop build carries that binary and its manifest. `src/magpie-engine.js`
+  // resolves `../vendor/magpie/` from its own directory, which inside this
+  // staged tree is `resources/service/vendor/magpie/` — the engine must stay
+  // inside `service/`, because electron-builder only ships `service/` and
+  // `runtime/` as extraResources. Never lift it to `resources/`: that directory
+  // is staged but not packaged, and the workspace would report
+  // "Magpie engine binary is unavailable" at runtime.
+  const target = `${process.platform}-${process.arch}`
+  const engine = JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'vendor/magpie/engine.json'), 'utf8'))
+  const binary = (engine.binaries ?? {})[target]
+  const pinned = typeof binary?.path === 'string' ? binary.path : ''
+  const parts = pinned ? [] : binary?.compressed?.parts ?? []
+  // Ship exactly one form of the engine. A pinned binary starts in place, with
+  // no first-run extraction and no writable-data dependency; the sharded
+  // payload is the fallback for a target whose build produced only parts, which
+  // `materializeEngine` reassembles on first start. Both present is normal
+  // (`engine.json` carries a pinned Windows build plus its gzipped payload), and
+  // copying both would waste 34 MB in the installer.
+  const shipParts = parts.length > 0
+  tree('src', file => /\.(js|json)$/.test(file) || (shipParts && /\.part$/.test(file)))
   for (const name of ['cli', 'service', 'management', 'desktop-update', 'login-terminal', 'open-external', 'eac', 'workbench', 'providers', 'library', 'client-terminal', 'routing']) copy(`packages/standalone/${name}.mjs`)
   tree('packages/standalone/channels', file => file.endsWith('.mjs'))
   tree('packages/standalone/web', file => /\.(html|js|css|json)$/.test(file))
   copy('packages/standalone/package.json')
   copy('packages/desktop/service-host.mjs')
   for (const name of ['qoder-auth-wasm.wasm', 'LICENSE', 'NOTICE.md']) copy(`vendor/channel-pack/${name}`)
-  // The model workspace runs the same pinned engine the plugin ships, so the
-  // desktop build carries that binary and its manifest. `src/magpie-engine.js`
-  // resolves `../vendor/magpie/` from its own directory, which inside this
-  // staged tree is `resources/vendor/magpie/`.
-  for (const name of ['engine.json', 'LICENSE', 'NOTICE.md']) copy(`vendor/magpie/${name}`, `../vendor/magpie/${name}`)
-  const target = `${process.platform}-${process.arch}`
-  const binaries = JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'vendor/magpie/engine.json'), 'utf8')).binaries ?? {}
-  const binary = binaries[target]
-  if (binary && typeof binary.path === 'string') {
-    copy(`vendor/magpie/${binary.path}`, `../vendor/magpie/${binary.path}`)
+  for (const name of ['engine.json', 'LICENSE', 'NOTICE.md']) copy(`vendor/magpie/${name}`)
+  if (pinned) {
+    copy(`vendor/magpie/${pinned}`)
+  } else if (shipParts) {
+    for (const part of parts) copy(part.path)
   } else if (requireWorkspace) {
     // A real installer without the engine ships a workspace page that can never
     // start, so packaging refuses. Staging alone (tests, source inspection) may
@@ -48,7 +63,9 @@ export function stageDesktopService(destination, { requireWorkspace = false } = 
   } else {
     console.log(`提示：${target} 没有引擎二进制，本次只生成不含模型工作台的服务资源`)
   }
-  copy('icon.svg', '../icon.svg')
+  // `src/magpie-engine.js` reads the brand mark from `../icon.svg`, i.e. inside
+  // the staged `service/` tree — the same layout the npm package uses.
+  copy('icon.svg')
   copy('LICENSE')
   copy('scripts/standalone-third-party.txt', 'THIRD_PARTY_NOTICES.txt')
   fs.writeFileSync(path.join(destination, 'package.json'), JSON.stringify({ private: true, type: 'module' }) + '\n')

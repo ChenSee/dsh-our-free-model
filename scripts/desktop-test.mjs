@@ -71,6 +71,36 @@ try {
     assert.ok(!fs.existsSync(path.join(serviceRoot, 'node_modules')))
     assert.ok(!fs.existsSync(path.join(serviceRoot, 'settings.json')))
   })
+  // engine.json 由 `src/magpie-engine.js` 从 `../vendor/magpie/` 读取；引擎必须
+  // 落在 service/ 里，因为 electron-builder 的 extraResources 只搬 service/ 与
+  // runtime/。曾经把它放到 resources/vendor，安装后工作台就报
+  // "Magpie engine binary is unavailable"。
+  await check('模型工作台引擎随 service/ 一起打包，安装后可解析', () => {
+    const engine = JSON.parse(fs.readFileSync(path.join(serviceRoot, 'vendor/magpie/engine.json'), 'utf8'))
+    const target = `${process.platform}-${process.arch}`
+    const entry = engine.binaries?.[target]
+    if (!entry) {
+      console.log(`skip  模型工作台引擎（${target} 没有钉住的二进制）`)
+      return
+    }
+    const staged = path.join(serviceRoot, 'vendor/magpie')
+    assert.ok(fs.existsSync(path.join(staged, 'engine.json')))
+    // 只装一种形态：有钉住的二进制就装它（无需首次解压），否则用分片载荷。
+    // 两者都在时安装包会白胖 34 MB。
+    const parts = entry.compressed?.parts ?? []
+    const binary = path.join(staged, entry.path)
+    if (typeof entry.path === 'string' && fs.existsSync(binary)) {
+      assert.equal(fs.statSync(binary).size, fs.statSync(path.join(repositoryRoot, 'vendor/magpie', entry.path)).size)
+      for (const part of parts) assert.ok(!fs.existsSync(path.join(serviceRoot, part.path)), `${part.path} 不应重复打包`)
+    } else {
+      assert.ok(parts.length > 0, `${target} 既没有二进制也没有分片载荷`)
+      for (const part of parts) assert.ok(fs.existsSync(path.join(serviceRoot, part.path)), part.path)
+    }
+    // 图标由引擎界面读取，同样必须留在 service/ 内。
+    assert.ok(fs.existsSync(path.join(serviceRoot, 'icon.svg')))
+    // 绝不能留在 resources/：那个目录不进安装包。
+    assert.ok(!fs.existsSync(path.join(path.dirname(serviceRoot), 'vendor')))
+  })
   occupied.listen(0, '127.0.0.1'); await once(occupied, 'listening')
   let first, ready
   await check('复制的内置 Node 在空 PATH 和含中文空格的安装路径启动，返回自身 PID 与真实端口', async () => {
