@@ -52,6 +52,13 @@ jobs:
         with:
           node-version: 22
 
+      # The runner starts with no git identity, so the version-alignment commit
+      # below dies on "Author identity unknown". Set it once, up front.
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
       # 版本只看本仓库根 package.json。同名标签已经存在就不再发（幂等），
       # 需要重发得显式勾 force —— 那时候会移动标签。
       - name: Detect local version
