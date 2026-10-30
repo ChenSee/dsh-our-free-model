@@ -1,8 +1,8 @@
 name: test
 
-# main is the live update source. Contributor checks do not need a signing key,
-# but the separate release-readiness check must pass before merging shipped
-# changes into main. Maintainers prepare signatures on the reviewed candidate.
+# The required check contexts in ruleset 24626699 are literal strings, including
+# the workflow and event labels. Explicit job names must match those contexts;
+# GitHub's combined display labels do not change the names reported by each job.
 on:
   push:
     branches: [main]
@@ -17,6 +17,7 @@ jobs:
   # maintainer still has release preparation to do, not that the author needs
   # access to the publisher's private key.
   release-readiness:
+    name: test / release-readiness (pull_request)
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
