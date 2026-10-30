@@ -10,6 +10,9 @@ Thumbs.db
 .aio-backup/
 .probe-*
 
+# WorkBuddy session state and working notes
+.workbuddy/
+
 # Editor
 .idea/
 .vscode/
