@@ -1,5 +1,5 @@
 {
-  "version": "2.7.3",
+  "version": "2.7.4",
   "algorithm": "sha256",
   "files": [
     {
@@ -50,7 +50,7 @@
     {
       "path": "package.json",
       "size": 4720,
-      "sha256": "29ef659e18d00ad0e0f5e81dbca4e9b10ea4aabeb3cc3884a72d1ae18c6979a6"
+      "sha256": "f85564496c0e91d23ef0a83553feed26424f348166ab4acd40ed985c3dfa27e0"
     },
     {
       "path": "src/adapter.js",
