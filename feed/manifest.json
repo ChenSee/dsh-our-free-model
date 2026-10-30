@@ -1,7 +1,7 @@
 {
   "version": "2.7.3",
   "base": "../",
-  "publishedAt": "2026-10-30T13:32:38.566Z",
+  "publishedAt": "2026-10-30T16:11:16.687Z",
   "notes": "",
   "files": [
     {
@@ -331,8 +331,8 @@
     },
     {
       "path": "src/subscriptions.js",
-      "size": 33790,
-      "sha256": "fc8dc15fa9fa2875df9367a7008eda29dc3794e8ebf66c7b9001b219977c5d86"
+      "size": 34173,
+      "sha256": "a741fda2ea1270ae4d5c5cb127db69c6a4ce640bd9650dade0be8ba7de8d9090"
     },
     {
       "path": "src/token-saver.js",
@@ -405,5 +405,5 @@
       "sha256": "b2cbbd38d5461521f40d8fbd947bfa9be641481602eaec0f1fc5d29cca8d7e5f"
     }
   ],
-  "signature": "bc5SYzVHwMtAoDX3LbLWbEp616yd+zGyrG0uwnOkdPXVevkf1KHP2FNraHMH89DZ2iqu9hv9vDDYzJhN0dNrDg=="
+  "signature": "2v9en4glgpW+Xx4TrGg0Jzi/6S5IoVSrTIZwkKS2+9CiMfYPBuhVpg6B+DNlnWCjIUvHfGxD+YUJio7iC6VkDw=="
 }

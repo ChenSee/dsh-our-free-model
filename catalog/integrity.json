@@ -329,8 +329,8 @@
     },
     {
       "path": "src/subscriptions.js",
-      "size": 33790,
-      "sha256": "fc8dc15fa9fa2875df9367a7008eda29dc3794e8ebf66c7b9001b219977c5d86"
+      "size": 34173,
+      "sha256": "a741fda2ea1270ae4d5c5cb127db69c6a4ce640bd9650dade0be8ba7de8d9090"
     },
     {
       "path": "src/token-saver.js",
