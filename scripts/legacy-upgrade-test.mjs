@@ -78,7 +78,11 @@ try {
     historical.dataDir = path.join(scratch, historical.version, 'private-data')
     fs.mkdirSync(historical.pkgDir, { recursive: true })
     fs.mkdirSync(historical.dataDir, { recursive: true })
-    execFileSync('tar', ['-xf', archive, '-C', historical.pkgDir], { windowsHide: true })
+    // Unpack from inside the scratch directory with bare file names: GNU tar
+    // reads the `C:` of an absolute Windows path as a remote host and refuses,
+    // and it reads a backslash as an escape rather than a path separator.
+    const tarDir = path.relative(scratch, historical.pkgDir).split(path.sep).join('/')
+    execFileSync('tar', ['-xf', path.basename(archive), '-C', tarDir], { cwd: scratch, windowsHide: true })
     fs.writeFileSync(path.join(historical.dataDir, 'user-settings.json'), '保留用户数据\n')
     await check(`${historical.version} 原版拒绝旧问题夹具，并接受当前 ${rows.length} 文件`, () => {
       historical.module.parseManifest(manifest)

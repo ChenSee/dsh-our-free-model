@@ -127,7 +127,10 @@ try {
     assert.throws(() => prepare(base, outside, 'outside'), /unsafe package files entry/))
   write('package.json', pkg)
   // Creating a symlink takes privilege on Windows; where the OS refuses, say so
-  // and move on — the rejection path stays covered by CI (ubuntu).
+  // and move on — the rejection path stays covered by CI (ubuntu). The same goes
+  // for a checkout whose git records links as plain files (core.symlinks=false,
+  // the default on Windows): the rejection is about the 120000 mode in the tree,
+  // and that mode never reaches this fixture's index, so nothing is exercised.
   let linked = null
   try {
     fs.symlinkSync(sentinel, path.join(repo, 'src/link.js'))
@@ -135,6 +138,11 @@ try {
   } catch (error) {
     if (error?.code !== 'EPERM' && error?.code !== 'EACCES') throw error
     console.log('skip  symlink rejection (this environment cannot create symlinks)')
+  }
+  if (linked !== null && git('ls-files', '--stage', '--', 'src/link.js').slice(0, 6) !== '120000') {
+    console.log('skip  symlink rejection (this checkout stores links as regular files)')
+    linked = null
+    fs.rmSync(path.join(repo, 'src/link.js'), { force: true })
   }
   if (linked !== null) {
     check('symlinks are rejected instead of dereferenced', () => {
