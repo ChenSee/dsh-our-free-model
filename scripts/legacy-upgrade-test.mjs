@@ -40,11 +40,14 @@ if (production) {
 } else manifest.signature = signManifest(parseManifest(manifest), keys.privateKey)
 const verifyKey = production ? PINNED_MANIFEST_PUBLIC_KEY : testKey
 const old = [
-  // 1.3.1 的 revision 曾写成 annotated tag `v1.3.1` 的对象 SHA（f14d261…）。
-  // tag 对象只在带 tag 的克隆里存在，CI 的 checkout 不取 tag，`git show
-  // <tag-sha>:…` 随之失败。这里改用 tag 指向的 commit，任何全量克隆都能解析。
+  // 两个夹具的 revision 原先都写成 annotated tag 的对象 SHA（1.3.1 是
+  // `v1.3.1`，2.5.9 是 `v2.5.9`）。tag 对象只在带 tag 的克隆里存在，而
+  // release-sign 的 checkout 用 `+refs/heads/*:refs/remotes/origin/*` 拉取、
+  // 不取 tag，`git show <tag-sha>:…` 随之失败，发布套件在最后一步挂掉、
+  // 重签结果无法入库。改指 tag 解析到的 commit：树完全相同（取出的
+  // updater.js 与 fixtures/ 逐字节一致），任何全量克隆都能解析。
   { version: '1.3.1', revision: 'cb4e2c307ec73a09d97a8595d4f76416b0a1fc83' },
-  { version: '2.5.9', revision: '313eaa45c3abc769cd4169326b9b4e7161d141a9' },
+  { version: '2.5.9', revision: '25ab765d6bb860779dbd8c53062953524f3cac09' },
 ]
 let requestCount = 0
 let tamperedPath = ''
