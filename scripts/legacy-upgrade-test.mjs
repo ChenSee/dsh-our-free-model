@@ -40,7 +40,10 @@ if (production) {
 } else manifest.signature = signManifest(parseManifest(manifest), keys.privateKey)
 const verifyKey = production ? PINNED_MANIFEST_PUBLIC_KEY : testKey
 const old = [
-  { version: '1.3.1', revision: 'f14d261557ae98e5d28eaa33f4471302cc7f35ad' },
+  // 1.3.1 的 revision 曾写成 annotated tag `v1.3.1` 的对象 SHA（f14d261…）。
+  // tag 对象只在带 tag 的克隆里存在，CI 的 checkout 不取 tag，`git show
+  // <tag-sha>:…` 随之失败。这里改用 tag 指向的 commit，任何全量克隆都能解析。
+  { version: '1.3.1', revision: 'cb4e2c307ec73a09d97a8595d4f76416b0a1fc83' },
   { version: '2.5.9', revision: '313eaa45c3abc769cd4169326b9b4e7161d141a9' },
 ]
 let requestCount = 0
