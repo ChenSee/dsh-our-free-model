@@ -370,6 +370,16 @@ const REF_PREFIX_TO_PROVIDER: ReadonlyArray<readonly [string, string]> = [
   ['GEMINI', 'gemini'],
 ]
 
+/**
+ * 已实现渠道的统一判定，拒绝未知渠道且不依赖旧产品黑名单。
+ *
+ * 派生自 `REF_PREFIX_TO_PROVIDER`，因此本 fork 额外保留的 `buddy` /
+ * `workbuddy` / `codearts` 自动被认可，无需另立清单。
+ */
+export function isSupportedProvider(provider: unknown): provider is string {
+  return typeof provider === 'string' && REF_PREFIX_TO_PROVIDER.some(([, id]) => id === provider)
+}
+
 /** 账号凭据 ref 形态：`{PREFIX}_ACCOUNT_{HEX}`（前缀由单一真相源派生）。 */
 const ACCOUNT_REF_RE = new RegExp(
   // ⚠️ 按前缀长度**降序**排列：`QODERCN` 必须排在 `QODER` 之前。虽然正则的

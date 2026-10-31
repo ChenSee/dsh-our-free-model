@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { execFileSync } from 'node:child_process'
+import { restrictPermissions as privatePermissions } from './open-external.js'
 
 const PROVIDERS = ['codex', 'claude', 'gemini', 'api']
 const FORMATS = ['openai-chat', 'openai-responses', 'anthropic-messages']
@@ -231,28 +231,6 @@ function parseQuota(provider, body, now, plan = null) {
   quota.status = quota.windows.some(row => row.usedPercent !== null || row.remainingAmount != null)
     || quota.balance?.amount != null || quota.balance?.unlimited === true ? 'ok' : 'unknown'
   return quota
-}
-
-// `whoami` is invariant for the life of the process, yet it used to be spawned
-// before every `icacls` — twice per credential save. On Windows a spawn costs
-// ~200 ms, and a busy store saves repeatedly, so the lookup is memoized.
-let cachedUser
-function currentUser(system32) {
-  if (cachedUser === undefined) {
-    cachedUser = execFileSync(path.join(system32, 'whoami.exe'), [],
-      { encoding: 'utf8', windowsHide: true, shell: false }).trim()
-  }
-  return cachedUser
-}
-
-function privatePermissions(file, directory = false) {
-  if (process.platform === 'win32') {
-    const system32 = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32')
-    const user = currentUser(system32)
-    execFileSync(path.join(system32, 'icacls.exe'),
-      [file, '/inheritance:r', '/grant:r', `${user}:${directory ? '(OI)(CI)F' : 'F'}`],
-      { stdio: 'ignore', windowsHide: true, shell: false })
-  } else fs.chmodSync(file, directory ? 0o700 : 0o600)
 }
 
 function readPrivate(file) {

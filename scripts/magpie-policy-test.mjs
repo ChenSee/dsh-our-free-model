@@ -182,6 +182,35 @@ try {
     assert.doesNotThrow(() => assertEngineMutation('GET', '/api/plugins/add', { spec: PACKAGE }))
   })
 
+  await check('third-party prose that names a channel passes through untouched', async () => {
+    // A real market listing (Agent Office) reads the session files of many
+    // desktop tools and its summary names them. In this fork none of those
+    // channels is excluded, so the prose is neither dropped nor rewritten —
+    // the boundary only has to leave id-bearing surfaces alone, which the
+    // next check covers.
+    const agentOffice = {
+      package: '@magpie-community/page-agent-office', name: 'Agent Office', community: true, kind: 'page',
+      summary: {
+        en: 'Reads the session files of Claude Code, Codex, WorkBuddy and CodeBuddy on this computer.',
+        zh: '读取本机 Claude Code、Codex、WorkBuddy、CodeBuddy 的会话文件。',
+      },
+    }
+    const filtered = filterEngineJSON('/api/plugins/listings', {
+      listings: [structuredClone(agentOffice), { package: PACKAGE, name: 'WorkBuddy', providers: IDS }],
+    })
+    assert.equal(filtered.listings.length, 2, '排除表为空：渠道行与第三方行都保留')
+    assert.equal(filtered.listings[0].package, agentOffice.package, 'the unrelated listing stays')
+    assert.equal(filtered.listings[0].name, 'Agent Office')
+    assert.equal(filtered.listings[0].summary.en, agentOffice.summary.en, '文案原样保留')
+    assert.equal(filtered.listings[0].summary.zh, agentOffice.summary.zh, '中文文案原样保留')
+    assert.equal(filterEngineJSON('/api/plugins/npm', { npm: { [agentOffice.package]: { description: agentOffice.summary.en } } })
+      .npm[agentOffice.package].description, agentOffice.summary.en, 'npm prose is untouched too')
+    // Id-bearing surfaces stay untouched: the deprecation list needs exact ids.
+    const providers = { movable: ['workbuddy', 'workbuddy-ai', 'zcode'], presets: [{ id: 'zcode', name: 'ZCode' }] }
+    assert.deepEqual(filterEngineJSON('/api/providers', structuredClone(providers)).movable,
+      ['workbuddy', 'workbuddy-ai', 'zcode'], 'provider ids are not redacted')
+  })
+
   console.log(`magpie-policy: ${checks} checks passed`)
 } finally {
   await engine.close()

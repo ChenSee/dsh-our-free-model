@@ -4914,8 +4914,14 @@ window.__ModuleLoader__.load({
                       type: 'button', className: 'ofm_minibtn', disabled: busy !== '' || !rpc,
                       onClick: () => accountAction('test:' + row.id, row.id, async () => {
                         const value = await rpc('account.test', { accountId: row.id }, 90_000)
+                        // The RPC envelope is `ok: true` here even when the probe
+                        // failed — `account.test` reports the outcome *inside*
+                        // `value`, so a failed probe lands on this branch with its
+                        // reason in `value.message`. Reading `value.error` (which
+                        // the server never sets) printed an empty reason: the
+                        // user saw "测试失败：" and nothing else (#681).
                         setNotice(value?.ok === false
-                          ? t('chan.test.failed').replace('{reason}', value?.error ?? '')
+                          ? t('chan.test.failed').replace('{reason}', value?.error ?? value?.message ?? '')
                           : t('chan.test.ok').replace('{ms}', String(value?.ms ?? value?.latencyMs ?? '—')))
                       }),
                     }, t('chan.act.test')),
@@ -6957,14 +6963,31 @@ window.__ModuleLoader__.load({
         const escape = event => {
           if (event.key === 'Escape') setExpanded(false)
         }
+        // The engine page is an iframe: once focus is inside it, key events go
+        // to the child document and the parent listener never sees them, so
+        // Escape did nothing in exactly the state the panel spends its time in.
+        // Listen on the frame's document too; same-origin, so it is reachable.
+        let frameEscape = null
+        const bindFrame = () => {
+          try {
+            const doc = frame.current?.contentDocument
+            if (!doc || frameEscape) return
+            frameEscape = doc
+            doc.addEventListener('keydown', escape)
+          } catch { /* cross-origin engine page: the parent listener still applies */ }
+        }
+        bindFrame()
+        const frameTimer = setInterval(bindFrame, 400)
         const focus = event => {
           if (!host.contains(event.target)) closeButton.current?.focus()
         }
         window.addEventListener('keydown', escape)
         document.addEventListener('focusin', focus)
         return () => {
+          clearInterval(frameTimer)
           window.removeEventListener('keydown', escape)
           document.removeEventListener('focusin', focus)
+          try { frameEscape?.removeEventListener('keydown', escape) } catch { /* frame already gone */ }
           if (root) root.inert = wasInert
           host.remove()
           if (focused?.isConnected) focused.focus?.()
@@ -7029,9 +7052,13 @@ window.__ModuleLoader__.load({
               state === 'starting' ? t('engine.starting') : t('engine.failed')),
             state === 'error' ? h(Button, { kind: 'primary', onClick: () => setGeneration(value => value + 1) }, t('engine.start')) : null))
       return h('div', { className: 'ofm_page ofm_engineworkspace', ref: anchor },
-        expanded ? portal ? ReactDOM.createPortal(
+        // While expanded the panel lives in its overlay portal. For the one frame
+        // before the portal host exists it stays inline: rendering `null` in that
+        // gap removed the whole toolbar, and with it the only collapse button —
+        // a missed portal left the workbench stuck open until a restart (#700).
+        expanded && portal ? ReactDOM.createPortal(
           h('div', { className: 'ofm_root ofm_engineoverlay', role: 'dialog', 'aria-modal': 'true',
-            'aria-label': t('engine.title'), 'data-ofm-effects': 'off' }, content), portal) : null : content)
+            'aria-label': t('engine.title'), 'data-ofm-effects': 'off' }, content), portal) : content)
     }
 
     function WorkspacePage({ t, summary, section, onSelect }) {
@@ -7407,16 +7434,16 @@ window.__ModuleLoader__.load({
          `document.elementFromPoint` over the next-page button returned BODY — the
          dialog could not be clicked at all. The full-viewport scrim already
          swallows every pointer event aimed at the app behind it. */
+      const host = acknowledged ? null : announcementPortalHost()
+      useEffect(() => () => {
+        if (host && host.parentNode !== null) host.parentNode.removeChild(host)
+      }, [host])
       if (acknowledged) return null
       const last = page === PAGES.length - 1
       const finish = async () => {
         try { await post(`/announcement/ack?version=${encodeURIComponent(summary?.announcementVersion ?? '')}`) } catch { /* ack is best effort */ }
         complete()
       }
-      const host = announcementPortalHost()
-      useEffect(() => () => {
-        if (host.parentNode !== null) host.parentNode.removeChild(host)
-      }, [host])
       return ReactDOM.createPortal(h('div', { className: 'ofm_scrim' },
         h('div', { className: 'ofm_ann', role: 'dialog', 'aria-modal': 'true', 'aria-label': t('title') },
           h('div', { className: 'ofm_annhead' },

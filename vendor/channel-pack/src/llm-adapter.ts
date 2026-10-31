@@ -1975,6 +1975,20 @@ export class CodeArtsAdapter extends LlmAdapter {
     // 又是一次无报错中断（与 `openai-compat.ts` 同因同修）。
     const droppedUnnamedCalls = [...toolCalls.values()].some(block => !block.announced)
     /**
+     * 是否**任一**工具调用的参数分片不完整（结构缺失）。
+     *
+     * ⚠️ 与 `buddy-adapter.ts` / `openai-compat.ts` / `lobsterai-adapter.ts`
+     * 同因同修：`isTruncatedArguments` 此前只用于「保留原样参数」，却**没有**
+     * 参与 `reason` 判定，于是未闭合字符串 / 丢前缀的分片仍被报成
+     * `tool-calls`，harness 会执行残缺调用并报 INVALID_ARGS，把脏参数写进
+     * 会话历史。`codearts` 是唯一走本文件的渠道，故它是这次漏判的唯一现场。
+     *
+     * 判据精确到「结构不完整」：语法非法但结构完整的参数由
+     * `isTruncatedArguments` 返回 false，仍走 `tool-calls`，让 schema 校验把
+     * 模型的真实错误回传给它自修（#474）。
+     */
+    const argsTruncated = [...toolCalls.values()].some(block => isTruncatedArguments(block.text))
+    /**
      * 思考死循环是否**是唯一的产出**（无可见正文、无工具调用）。
      *
      * ⚠️ 与 `buddy-adapter.ts` / `openai-compat.ts` 同因同修（Gitee !IKIZNK）：
@@ -2004,6 +2018,7 @@ export class CodeArtsAdapter extends LlmAdapter {
       : loopDetected
         ? { kind: 'max-tokens' as const }
       : finishReason === 'length'
+        || argsTruncated
         || (droppedUnnamedCalls && toolOrder.length === 0)
         ? { kind: 'max-tokens' as const }
         : finishReason === 'tool_calls' || toolOrder.length > 0

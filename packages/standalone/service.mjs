@@ -467,7 +467,8 @@ export async function startStandalone({
       testModel: (id, effort, options) => channels.handles(id) ? channels.testModel(id, options) : core.testModel(id, effort, options),
       async refreshCatalog(options) {
         if (stopped) return
-        await Promise.all([core.refreshCatalog(options), channels.refresh().catch(error => { if (!stopped) throw error })])
+        const [result, channelResult] = await Promise.all([core.refreshCatalog(options), channels.refresh(options).catch(error => { if (!stopped) throw error })])
+        if (options?.report) return { ...result, sources: { ...result.sources, ...channelResult?.sources } }
       },
     }
     management = createManagement({

@@ -276,6 +276,69 @@ async function verifySourceRegressions({ ctx, adapters, call, creds }) {
   const { verifyChannelPrFixes } = await import('./channel-pr-fixes-test.mjs')
   await verifyChannelPrFixes()
   await verifyLoopResumeEvents()
+  await verifyGatewayToolCallFrames()
+
+  // ── #681：探测分派表、候选链与耗时回传 ─────────────────────────────────
+  //
+  // 三处缺陷，各自独立：
+  // 1. `probeWithAdapter` 没有 loomy 分支 → 「测试」必然抛
+  //    `Unsupported probe adapter: loomy`；
+  // 2. `account.test` 只测目录第一个模型 → TRAE 的 `doubao-for-auto`（自动路由
+  //    占位模型，回 3003）把好好的账号报成不可用；
+  // 3. 服务端从不返回 `ms`，客户端却一直在读它。
+  {
+    const probe = await import('../vendor/channel-pack/src/account-probe.ts')
+    const sse = (...frames) => new Response(frames.map(row => `data: ${JSON.stringify(row)}\n\n`).join('') + 'data: [DONE]\n\n')
+
+    // 候选链的挑选规则：显式指定只测它；否则「已有标记 → 目录顺序」去重截断。
+    assert.deepEqual(
+      probe.pickTestModels({ provider: 'trae', modelRateLimits: { b: 1, a: 2 } }, ['a', 'c', 'd', 'e', 'f']),
+      ['b', 'a', 'c', 'd'],
+      'marked models come first, then catalog order, deduped and capped',
+    )
+    assert.deepEqual(probe.pickTestModels({ provider: 'trae' }, ['a', 'b'], 'only'), ['only'], 'an explicit model is tested alone')
+    assert.deepEqual(probe.pickTestModels({ provider: 'trae' }, []), [], 'no candidates stays empty rather than guessing')
+
+    // 候选链的执行：第一个成功即停，失败的留在 `tried` 里。
+    const chainEntry = { id: 'chain', provider: 'trae', credentialRef: 'CHAIN', enabled: true, createdAt: 1 }
+    const attempted = []
+    const chained = await probe.testAccountCandidates({ findAccount: () => chainEntry }, 'chain', ['m0', 'm1', 'm2'], {
+      timeoutMs: 1000,
+      probe: async (_entry, modelId) => {
+        attempted.push(modelId)
+        return modelId === 'm0' ? { modelId, ok: false, message: '无法确认：3003 model service is unavailable' } : { modelId, ok: true }
+      },
+    })
+    assert.deepEqual(attempted, ['m0', 'm1'], 'the chain stops at the first model that answers')
+    assert.equal(chained.ok, true)
+    assert.equal(chained.modelId, 'm1')
+    assert.deepEqual(chained.tried.map(row => [row.modelId, row.ok]), [['m0', false], ['m1', true]])
+    assert.equal(typeof chained.ms, 'number', 'the latency the client renders is actually reported')
+
+    // loomy 走真实 RPC：没有分支时这里拿到的是 `ok: false` +
+    // `无法确认：Unsupported probe adapter: loomy`。
+    const loomyId = 'probe-loomy-fixture', loomyRef = 'PROBE_LOOMY_FIXTURE'
+    creds.set(loomyRef, { value: JSON.stringify({ access_token: 'probe-token', userid: '123456789012345678', phone: '13800138000' }) })
+    await ctx.accountPool.addAccount({ id: loomyId, provider: 'loomy', nickname: 'Probe fixture', credentialRef: loomyRef, enabled: true, refreshable: false, createdAt: 1 })
+    const savedAudit = auditFetch
+    try {
+      auditFetch = async input => {
+        const url = String(input)
+        if (url.endsWith('/chat/completions')) return sse({ choices: [{ delta: { content: '收到' }, finish_reason: 'stop' }] })
+        throw new Error(`unexpected offline request: ${url}`)
+      }
+      const result = await call('account.test', { accountId: loomyId, modelId: 'deepseek-v4-flash-0731' })
+      assert.equal(result.ok, true, 'account.test itself succeeds')
+      assert.equal(result.value.ok, true, `loomy probe must reach the adapter: ${result.value.message ?? ''}`)
+      assert.equal(result.value.modelId, 'deepseek-v4-flash-0731')
+      assert.equal(typeof result.value.ms, 'number', 'and reports how long it took')
+    } finally {
+      auditFetch = savedAudit
+      await ctx.accountPool.removeAccount(loomyId)
+      creds.delete(loomyRef)
+    }
+    console.log('ok  #681 probe: loomy has an adapter, the chain skips dead models, latency is reported')
+  }
   // 目录 `efforts` 的键序不是强度序（`dfmodel` 实测是 high/max/low），
   // 官方客户端还会按强度稳定排序；这条回归保证下发给 DSH 的档位序也是强度序。
   {
@@ -711,6 +774,30 @@ async function verifySourceRegressions({ ctx, adapters, call, creds }) {
       { index: 0, id: 'call-1', function: { name: 'read', arguments: '{}' } },
     ] }, 'tool_calls'))))
     assert.equal(tools.at(-1).reason.kind, 'tool-calls', `${provider}: tools remain valid`)
+    // Issue #474: arguments that are complete but syntactically invalid (a bare
+    // value, all brackets closed) are not a cut — report tool-calls so the
+    // schema violation reaches the model; only a structurally incomplete value
+    // still downgrades to max-tokens.
+    const invalidArgs = await collect(consume(response(frame({ tool_calls: [
+      { index: 0, id: 'call-1', function: { name: 'read', arguments: '{"pattern": **/*billion-context*/package.json, "path": "D:/", "limit": 50}' } },
+    ] }, 'tool_calls'))))
+    assert.equal(invalidArgs.at(-1).reason.kind, 'tool-calls', `${provider}: complete-but-invalid arguments are not a cut`)
+    // The invalid arguments must reach the host verbatim — normalize must not
+    // forge them into a legal-looking '{}' (the exact trap its own comment
+    // forbids); only then can the model see and fix its real mistake.
+    assert.equal(assemble(invalidArgs).find(block => block.type === 'tool-call')?.arguments,
+      '{"pattern": **/*billion-context*/package.json, "path": "D:/", "limit": 50}', `${provider}: invalid arguments pass through verbatim`)
+    const cutArgs = await collect(consume(response(frame({ tool_calls: [
+      { index: 0, id: 'call-1', function: { name: 'read', arguments: '{"pattern": "un' } },
+    ] }, 'tool_calls'))))
+    assert.equal(cutArgs.at(-1).reason.kind, 'max-tokens', `${provider}: an unclosed string is still a cut`)
+    // A negative depth is the lost-prefix fragment (`"path.txt"}` — both
+    // quotes present, the opening `{` lost) — still a cut, it belongs on the
+    // proven retry path.
+    const lostPrefix = await collect(consume(response(frame({ tool_calls: [
+      { index: 0, id: 'call-1', function: { name: 'read', arguments: '"some/path.txt"}' } },
+    ] }, 'tool_calls'))))
+    assert.equal(lostPrefix.at(-1).reason.kind, 'max-tokens', `${provider}: a lost-prefix fragment is still a cut`)
     const callDelta = { tool_calls: [{ index: 0, id: 'call-1', function: { name: 'read', arguments: '{}' } }] }
     for (const rows of [
       [frame({ content: ' \n', ...callDelta }, 'tool_calls')],
@@ -999,4 +1086,49 @@ async function verifyLoopResumeEvents() {
     if (savedMax === undefined) delete process.env.DSH_REASONING_LOOP_AUTO_RESUME_MAX
     else process.env.DSH_REASONING_LOOP_AUTO_RESUME_MAX = savedMax
   }
+}
+
+/**
+ * 网关的 OpenAI 流式输出：`delta.tool_calls[]` 的 `id` 与 `function.name` 只能随该调用的首帧
+ * 出现一次，`index` 必须是客户端能直接当下标的连续调用序号。
+ * 官方客户端的流式累加器对这两个字段是**字符串拼接**（openai-python 的 `accumulate_delta`
+ * 会把每帧的 name 追加），每帧重发就会把工具名拼成 `readreadread`，客户端随后报
+ * 「未找到指定的工具」；DSH 侧 issue #20 记录的是同一机制的另一条通路。
+ * 这里按客户端语义重放一遍，修复前会得到 `readread` 与翻倍的 id。
+ */
+async function verifyGatewayToolCallFrames() {
+  const { toOpenAiSse } = await import('../vendor/channel-pack/src/openai-gateway/stream.ts')
+  const upstream = async function* () {
+    yield { type: 'reasoning-delta', text: '先想一下' } // 推理块占掉 DSH 的块 0
+    yield { type: 'tool-call-delta', index: 1, id: 'call_a', name: 'read', argumentsDelta: '{"file":' }
+    yield { type: 'tool-call-delta', index: 1, id: 'call_a', name: 'read', argumentsDelta: '"x.md"}' }
+    yield { type: 'tool-call-delta', index: 2, id: 'call_b', name: 'write', argumentsDelta: '{}' }
+    yield { type: 'finish', reason: { kind: 'tool-calls' } }
+  }
+  const frames = []
+  for await (const chunk of toOpenAiSse(upstream(), 'chatcmpl-fixture', 'fixture-model')) {
+    for (const part of chunk.split('\n\n')) {
+      if (part.startsWith('data: ') && part !== 'data: [DONE]') frames.push(JSON.parse(part.slice('data: '.length)))
+    }
+  }
+  const calls = frames.flatMap(frame => frame.choices?.[0]?.delta?.tool_calls ?? [])
+  const callAt = index => calls.filter(call => call.index === index)
+  assert.deepEqual(calls.map(call => call.index), [0, 0, 1], 'index 必须从 0 起连续编号，不能透传 DSH 的块序号')
+  assert.deepEqual(callAt(0).filter(call => call.id !== undefined).map(call => call.id), ['call_a'], 'id 只随首帧发一次')
+  assert.deepEqual(callAt(0).filter(call => call.function.name !== undefined).map(call => call.function.name), ['read'], 'function.name 只随首帧发一次')
+  assert.equal(callAt(0).map(call => call.function.arguments).join(''), '{"file":"x.md"}', 'arguments 仍是每帧增量')
+  assert.equal(callAt(1).map(call => call.function.arguments).join(''), '{}')
+  const accumulated = []
+  for (const call of calls) {
+    const slot = accumulated[call.index] ?? { id: '', name: '', arguments: '' }
+    slot.id += call.id ?? ''
+    slot.name += call.function.name ?? ''
+    slot.arguments += call.function.arguments ?? ''
+    accumulated[call.index] = slot
+  }
+  assert.deepEqual(accumulated, [
+    { id: 'call_a', name: 'read', arguments: '{"file":"x.md"}' },
+    { id: 'call_b', name: 'write', arguments: '{}' },
+  ], '按客户端累加器拼接后，工具名与 id 不能重复')
+  console.log('ok  openai-gateway tool-call frames: id/name 只在首帧、index 从 0 起，客户端拼接后工具名不重复')
 }

@@ -136,9 +136,19 @@
     "@deepseek-ai/schemastery": "^3.18.4"
   },
   "devDependencies": {
+    "dsh-llm-legacy": "npm:@deepseek-ai/dsh-llm@0.1.5-rc.2",
+    "esbuild": "0.25.9",
     "jose": "6.1.3",
-    "undici": "8.11.2",
     "typescript": "^5.9.2",
-    "esbuild": "0.25.9"
+    "undici": "8.11.2"
+  },
+  "overrides": {
+    "dsh-llm-legacy": {
+      "@deepseek-ai/dsh-brand": "0.1.5-rc.2",
+      "@deepseek-ai/dsh-timeout": "0.1.5-rc.2",
+      "@deepseek-ai/dsh-typert-protocol": "0.1.5-rc.2",
+      "@deepseek-ai/dsh-util-crypto": "0.1.5-rc.2",
+      "@deepseek-ai/dsh-util-values": "0.1.5-rc.2"
+    }
   }
 }
